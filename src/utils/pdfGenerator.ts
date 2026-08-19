@@ -1,6 +1,7 @@
 import { jsPDF } from "jspdf";
 import { PDFExportOptions, ScannedDocument, ScannedPage } from "../types";
 import { CVEngine } from "./cvEngine";
+import { generateDocumentFileName } from "./naming";
 
 export class PDFGenerator {
   /**
@@ -71,11 +72,8 @@ export class PDFGenerator {
       pdf.addImage(page.processedImage, "JPEG", posX, posY, drawWidth, drawHeight, undefined, "FAST");
     }
 
-    const cleanTitle = (doc.title || "VietScan_Tai_lieu")
-      .trim()
-      .replace(/[\/\\:*?"<>|]/g, "_")
-      .replace(/\s+/g, "_");
-    const fileName = `${cleanTitle}.pdf`;
+    let fileName = doc.title ? `${doc.title.trim().replace(/[\/\\:*?"<>|]/g, "_").replace(/\s+/g, "_")}.pdf` : generateDocumentFileName({ date: doc.createdAt });
+    if (!fileName.endsWith(".pdf")) fileName += ".pdf";
 
     const blob = pdf.output("blob");
     const url = URL.createObjectURL(blob);
@@ -109,7 +107,6 @@ export class PDFGenerator {
     const pageHeight = isLandscape ? (isA5 ? 148 : 210) : (isA5 ? 210 : 297);
 
     // Standard Vietnamese ID card / CCCD / GPLX print size is 85.6mm x 53.98mm
-    // On A4 paper, standard photo print size is typically 86mm x 54mm or scaled slightly for clarity (e.g. 96mm x 60mm)
     const cardWidthMm = isA5 ? 90 : 105;
     const cardHeightMm = cardWidthMm / 1.586; // ~66mm on A4
 
@@ -159,12 +156,8 @@ export class PDFGenerator {
       );
     }
 
-    const typePrefix = doc.category === "cccd" ? "CCCD_2_Mat" : "Bang_lai_xe_2_Mat";
-    const cleanTitle = (doc.title || typePrefix)
-      .trim()
-      .replace(/[\/\\:*?"<>|]/g, "_")
-      .replace(/\s+/g, "_");
-    const fileName = `${cleanTitle}.pdf`;
+    let fileName = doc.title ? `${doc.title.trim().replace(/[\/\\:*?"<>|]/g, "_").replace(/\s+/g, "_")}.pdf` : generateDocumentFileName({ date: doc.createdAt });
+    if (!fileName.endsWith(".pdf")) fileName += ".pdf";
 
     const blob = pdf.output("blob");
     const url = URL.createObjectURL(blob);

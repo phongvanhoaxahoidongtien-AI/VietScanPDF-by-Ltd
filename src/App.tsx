@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { ScannedDocument, ScannedPage, ScanMode } from "./types";
 import { StorageService } from "./utils/storage";
 import { CVEngine } from "./utils/cvEngine";
+import { generateDefaultDocumentTitle } from "./utils/naming";
 import { HomeScreen } from "./components/HomeScreen";
 import { BottomNav } from "./components/BottomNav";
 import { CameraScanner } from "./components/CameraScanner";
@@ -46,15 +47,8 @@ export default function App() {
   const handleStartScan = (mode: ScanMode = "document") => {
     setScanMode(mode);
 
-    // Default title based on mode
-    let defaultTitle = `Văn_bản_${new Date().toLocaleDateString("vi-VN").replace(/\//g, "-")}`;
-    if (mode === "cccd") {
-      defaultTitle = `CCCD_2_Mat_${new Date().toLocaleDateString("vi-VN").replace(/\//g, "-")}`;
-    } else if (mode === "driver_license") {
-      defaultTitle = `Bang_lai_xe_${new Date().toLocaleDateString("vi-VN").replace(/\//g, "-")}`;
-    } else if (mode === "certificate") {
-      defaultTitle = `Bang_cap_${new Date().toLocaleDateString("vi-VN").replace(/\//g, "-")}`;
-    }
+    // Standardized title format: ViietScan_by_Ltd_tai_lieu_DD_MM_YY
+    const defaultTitle = generateDefaultDocumentTitle();
 
     const newDoc: ScannedDocument = {
       id: `doc_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
@@ -162,7 +156,7 @@ export default function App() {
           if (loadedCount === fileList.length) {
             const newDoc: ScannedDocument = {
               id: `doc_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-              title: `Tai_lieu_nhap_${new Date().toLocaleDateString("vi-VN").replace(/\//g, "-")}`,
+              title: generateDefaultDocumentTitle(),
               category: "document",
               pages: newPages,
               createdAt: Date.now(),

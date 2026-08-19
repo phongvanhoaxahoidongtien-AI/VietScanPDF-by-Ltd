@@ -1,4 +1,5 @@
 import { FilterMode, Point, QuadPoints } from "../types";
+import { DocumentTracker } from "./documentTracker";
 
 /**
  * Computer Vision & Image Processing Engine for VietScanPDF
@@ -191,7 +192,7 @@ export class CVEngine {
       }
     }
 
-    // 6. Find the best candidate quadrilateral polygon
+    // 6. Find and evaluate candidate quadrilateral polygons with multi-factor scoring
     let bestQuad: QuadPoints | null = null;
     let bestScore = 0;
     const totalArea = workW * workH;
@@ -217,7 +218,7 @@ export class CVEngine {
       if (approx.length === 4) {
         quadCandidate = approx;
       } else if (approx.length > 4 && approx.length <= 8) {
-        // Reduce to 4 dominant corners via corner angle deviation
+        // Reduce to 4 dominant corners
         quadCandidate = this.reduceTo4Corners(approx);
       } else if (hull.length >= 4) {
         // Fallback to 4 extreme directional points of convex hull
@@ -227,12 +228,31 @@ export class CVEngine {
       if (quadCandidate && quadCandidate.length === 4) {
         const sortedQuad = this.orderQuadPoints(quadCandidate);
         if (this.isValidConvexQuad(sortedQuad, workW, workH)) {
-          // Calculate score based on area, convexity, and aspect ratio match
+          // Multi-factor Scoring:
+          // 1. Area ratio (prefer 25% to 85%)
           const qArea = this.quadArea(sortedQuad);
-          const score = qArea / totalArea;
+          const qAreaRatio = qArea / totalArea;
+          const areaScore = Math.min(1, qAreaRatio / 0.65);
 
-          if (score > bestScore) {
-            bestScore = score;
+          // 2. Orthogonality / Rectangularity score
+          const orthoScore = this.calculateOrthogonalityScore(sortedQuad);
+
+          // 3. Aspect Ratio closeness
+          const wTop = Math.hypot(sortedQuad.topRight.x - sortedQuad.topLeft.x, sortedQuad.topRight.y - sortedQuad.topLeft.y);
+          const wBot = Math.hypot(sortedQuad.bottomRight.x - sortedQuad.bottomLeft.x, sortedQuad.bottomRight.y - sortedQuad.bottomLeft.y);
+          const hLeft = Math.hypot(sortedQuad.bottomLeft.x - sortedQuad.topLeft.x, sortedQuad.bottomLeft.y - sortedQuad.topLeft.y);
+          const hRight = Math.hypot(sortedQuad.bottomRight.x - sortedQuad.topRight.x, sortedQuad.bottomRight.y - sortedQuad.topRight.y);
+          const avgW = (wTop + wBot) / 2;
+          const avgH = (hLeft + hRight) / 2;
+          const aspect = Math.max(avgW, avgH) / Math.max(1, Math.min(avgW, avgH));
+          const targetRatio = targetAspect === "card" ? 1.586 : 1.414;
+          const aspectDiff = Math.abs(aspect - targetRatio);
+          const aspectScore = Math.max(0, 1 - aspectDiff * 0.8);
+
+          const compositeScore = areaScore * 0.40 + orthoScore * 0.40 + aspectScore * 0.20;
+
+          if (compositeScore > bestScore) {
+            bestScore = compositeScore;
             bestQuad = sortedQuad;
           }
         }
@@ -244,13 +264,13 @@ export class CVEngine {
       const brightQuad = this.findBrightDocumentRegionQuad(blurred, workW, workH, avgLuma);
       if (brightQuad) {
         bestQuad = brightQuad;
-        bestScore = 0.65;
+        bestScore = 0.58;
       }
     }
 
     // 8. Scale points back to original video/canvas coordinate space
     const invScale = 1 / scale;
-    if (bestQuad && bestScore > 0.1) {
+    if (bestQuad && bestScore > 0.35) {
       const fullQuad: QuadPoints = {
         topLeft: {
           x: Math.max(0, Math.min(srcWidth, bestQuad.topLeft.x * invScale)),
@@ -270,9 +290,18 @@ export class CVEngine {
         },
       };
 
+      const normalizedFullQuad = DocumentTracker.normalize4Corners([
+        fullQuad.topLeft,
+        fullQuad.topRight,
+        fullQuad.bottomRight,
+        fullQuad.bottomLeft,
+      ]);
+
+      const confidence = Math.min(0.96, Math.max(0.40, bestScore));
+
       return {
-        quad: fullQuad,
-        confidence: Math.min(0.98, bestScore + 0.35),
+        quad: normalizedFullQuad,
+        confidence,
         isClear: true,
         isRealQuad: true,
       };
@@ -281,10 +310,41 @@ export class CVEngine {
     // Default fallback frame
     return {
       quad: this.getDefaultQuad(srcWidth, srcHeight, targetAspect),
-      confidence: 0.4,
+      confidence: 0.25,
       isClear: false,
       isRealQuad: false,
     };
+  }
+
+  /**
+   * Measure how close 4 interior corners are to 90 degrees (orthogonality score 0.0 to 1.0)
+   */
+  static calculateOrthogonalityScore(q: QuadPoints): number {
+    const pts = [q.topLeft, q.topRight, q.bottomRight, q.bottomLeft];
+    let totalScore = 0;
+
+    for (let i = 0; i < 4; i++) {
+      const prev = pts[(i + 3) % 4];
+      const curr = pts[i];
+      const next = pts[(i + 1) % 4];
+
+      const v1x = prev.x - curr.x;
+      const v1y = prev.y - curr.y;
+      const v2x = next.x - curr.x;
+      const v2y = next.y - curr.y;
+
+      const len1 = Math.hypot(v1x, v1y);
+      const len2 = Math.hypot(v2x, v2y);
+      if (len1 === 0 || len2 === 0) continue;
+
+      // Cosine of angle: dot product / (|v1|*|v2|)
+      const cosTheta = Math.abs((v1x * v2x + v1y * v2y) / (len1 * len2));
+      // For 90 degrees, cosTheta is 0. Score is 1 - cosTheta.
+      const angleScore = Math.max(0, 1 - cosTheta * 1.5);
+      totalScore += angleScore;
+    }
+
+    return totalScore / 4;
   }
 
   /**
@@ -504,44 +564,17 @@ export class CVEngine {
 
   /**
    * Sort 4 points into [TopLeft, TopRight, BottomRight, BottomLeft]
+   * Uses polar angles & centroid projection to guarantee no flipping or swapping
    */
   static orderQuadPoints(points: Point[]): QuadPoints {
-    let tl = points[0],
-      tr = points[0],
-      br = points[0],
-      bl = points[0];
-    let minSum = Infinity,
-      maxSum = -Infinity,
-      minDiff = Infinity,
-      maxDiff = -Infinity;
-
-    for (const p of points) {
-      const sum = p.x + p.y;
-      const diff = p.x - p.y;
-
-      if (sum < minSum) {
-        minSum = sum;
-        tl = p;
-      }
-      if (sum > maxSum) {
-        maxSum = sum;
-        br = p;
-      }
-      if (diff > maxDiff) {
-        maxDiff = diff;
-        tr = p;
-      }
-      if (diff < minDiff) {
-        minDiff = diff;
-        bl = p;
-      }
+    if (points.length === 4) {
+      return DocumentTracker.normalize4Corners(points);
     }
-
     return {
-      topLeft: tl,
-      topRight: tr,
-      bottomRight: br,
-      bottomLeft: bl,
+      topLeft: points[0] || { x: 0, y: 0 },
+      topRight: points[1] || { x: 100, y: 0 },
+      bottomRight: points[2] || { x: 100, y: 100 },
+      bottomLeft: points[3] || { x: 0, y: 100 },
     };
   }
 

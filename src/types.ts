@@ -57,6 +57,19 @@ export interface CameraQualityMetrics {
   detectedQuad: QuadPoints | null;
   guidanceText: string;
   canAutoCapture: boolean;
+  confidence?: number;
+  stabilityScore?: number;
+}
+
+export interface DocumentTrackingState {
+  isDetected: boolean;
+  rawQuad: QuadPoints | null;
+  smoothedQuad: QuadPoints | null;
+  confidence: number; // 0.0 to 1.0
+  stabilityScore: number; // 0 to 100
+  stableFrames: number;
+  isReadyForCapture: boolean;
+  guidance: string;
 }
 
 export interface PDFExportOptions {

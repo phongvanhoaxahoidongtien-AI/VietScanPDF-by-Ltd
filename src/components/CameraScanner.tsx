@@ -15,9 +15,11 @@ import {
   Award,
   IdCard,
   RefreshCw,
+  ShieldCheck,
 } from "lucide-react";
 import { ScanMode, QuadPoints, ScannedPage, FilterMode, Point } from "../types";
 import { CVEngine } from "../utils/cvEngine";
+import { DocumentTracker } from "../utils/documentTracker";
 
 interface CameraScannerProps {
   initialMode?: ScanMode;
@@ -48,15 +50,17 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
   const [guidance, setGuidance] = useState<string>("Đang khởi động camera...");
   const [isCapturing, setIsCapturing] = useState<boolean>(false);
   const [steadyCounter, setSteadyCounter] = useState<number>(0);
+  const [stabilityScore, setStabilityScore] = useState<number>(0);
+  const [confidenceScore, setConfidenceScore] = useState<number>(0);
+  const [isDetected, setIsDetected] = useState<boolean>(false);
   const [detectedQuad, setDetectedQuad] = useState<QuadPoints | null>(null);
   const [screenQuad, setScreenQuad] = useState<QuadPoints | null>(null);
 
   // For 2-sided modes (CCCD / Driver License)
   const [cardSide, setCardSide] = useState<"front" | "back">("front");
 
-  // History tracking for auto-capture stability check
-  const quadHistoryRef = useRef<QuadPoints[]>([]);
-  const smoothedQuadRef = useRef<QuadPoints | null>(null);
+  // Document Tracker Instance
+  const trackerRef = useRef<DocumentTracker>(new DocumentTracker());
   const isCapturingRef = useRef<boolean>(false);
 
   // Start Camera stream
@@ -121,6 +125,15 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
       }
     };
   }, [startCamera]);
+
+  // Reset tracker on mode or cardSide change
+  useEffect(() => {
+    trackerRef.current.reset();
+    setSteadyCounter(0);
+    setStabilityScore(0);
+    setConfidenceScore(0);
+    setIsDetected(false);
+  }, [mode, cardSide]);
 
   // Toggle Torch/Flash
   const toggleTorch = async () => {
@@ -189,7 +202,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
 
       const rawDataUrl = frameCanvas.toDataURL("image/jpeg", 0.95);
 
-      // Determine quad to crop
+      // Determine quad to crop (prioritize tracked smoothed quad)
       const targetAspectType = mode === "cccd" || mode === "driver_license" ? "card" : "document";
       const detectedResult = CVEngine.detectDocumentQuad(frameCanvas, vw, vh, targetAspectType);
       const q =
@@ -224,13 +237,12 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           onCapturePage(newPage, false);
           setCardSide("back");
           setGuidance("Lật sang MẶT SAU của thẻ");
+          trackerRef.current.reset();
           setSteadyCounter(0);
-          quadHistoryRef.current = [];
-          smoothedQuadRef.current = null;
           setTimeout(() => {
             isCapturingRef.current = false;
             setIsCapturing(false);
-          }, 400);
+          }, 450);
           return;
         } else {
           // Completed both sides!
@@ -238,34 +250,24 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           setTimeout(() => {
             isCapturingRef.current = false;
             setIsCapturing(false);
-          }, 400);
+          }, 450);
           return;
         }
       }
 
       onCapturePage(newPage, false);
+      trackerRef.current.reset();
       setSteadyCounter(0);
-      quadHistoryRef.current = [];
-      smoothedQuadRef.current = null;
       setTimeout(() => {
         isCapturingRef.current = false;
         setIsCapturing(false);
-      }, 400);
+      }, 450);
     },
     [detectedQuad, mode, cardSide, onCapturePage]
   );
 
-  // Real-time detection & 4-corner polygon tracking loop
+  // Real-time detection & 4-corner polygon tracking loop with Temporal Filter
   useEffect(() => {
-    let localSteadyCount = 0;
-
-    const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
-
-    const smoothPoint = (current: Point, target: Point, alpha: number): Point => ({
-      x: lerp(current.x, target.x, alpha),
-      y: lerp(current.y, target.y, alpha),
-    });
-
     const processFrame = () => {
       const video = videoRef.current;
       const overlay = overlayCanvasRef.current;
@@ -286,7 +288,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
 
           const targetAspect = mode === "cccd" || mode === "driver_license" ? "card" : "document";
 
-          // Detect document quad on current video frame
+          // 1. Raw Edge & Contour Detection
           const detection = CVEngine.detectDocumentQuad(
             video,
             video.videoWidth,
@@ -294,83 +296,59 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
             targetAspect
           );
 
-          const detected = detection.quad;
-          const isReal = detection.isRealQuad;
+          // 2. Tracking & Temporal Smoothing via DocumentTracker
+          const trackResult = trackerRef.current.update(
+            detection.isRealQuad ? detection.quad : null,
+            detection.confidence,
+            video.videoWidth,
+            video.videoHeight
+          );
 
-          // Evaluate sharpness, brightness, stability
-          const quality = CVEngine.evaluateFrameQuality(video, isReal ? detected : null);
+          setIsDetected(trackResult.isDetected);
+          setStabilityScore(trackResult.stabilityScore);
+          setConfidenceScore(Math.round(trackResult.confidence * 100));
+          setSteadyCounter(trackResult.stableFrames);
 
-          // Map quad coordinates to screen overlay
+          // 3. Coordinate mapping from video space to screen space
           const scaleX = vw / (video.videoWidth || 1);
           const scaleY = vh / (video.videoHeight || 1);
 
-          const targetScreenQuad: QuadPoints = {
-            topLeft: { x: detected.topLeft.x * scaleX, y: detected.topLeft.y * scaleY },
-            topRight: { x: detected.topRight.x * scaleX, y: detected.topRight.y * scaleY },
-            bottomRight: { x: detected.bottomRight.x * scaleX, y: detected.bottomRight.y * scaleY },
-            bottomLeft: { x: detected.bottomLeft.x * scaleX, y: detected.bottomLeft.y * scaleY },
-          };
-
-          // Apply Exponential Moving Average (EMA) smoothing for fluid overlay rendering
-          if (!smoothedQuadRef.current) {
-            smoothedQuadRef.current = targetScreenQuad;
+          let curScreen: QuadPoints;
+          if (trackResult.smoothedQuad) {
+            curScreen = {
+              topLeft: {
+                x: trackResult.smoothedQuad.topLeft.x * scaleX,
+                y: trackResult.smoothedQuad.topLeft.y * scaleY,
+              },
+              topRight: {
+                x: trackResult.smoothedQuad.topRight.x * scaleX,
+                y: trackResult.smoothedQuad.topRight.y * scaleY,
+              },
+              bottomRight: {
+                x: trackResult.smoothedQuad.bottomRight.x * scaleX,
+                y: trackResult.smoothedQuad.bottomRight.y * scaleY,
+              },
+              bottomLeft: {
+                x: trackResult.smoothedQuad.bottomLeft.x * scaleX,
+                y: trackResult.smoothedQuad.bottomLeft.y * scaleY,
+              },
+            };
           } else {
-            const alpha = 0.45; // Smooth factor
-            smoothedQuadRef.current = {
-              topLeft: smoothPoint(smoothedQuadRef.current.topLeft, targetScreenQuad.topLeft, alpha),
-              topRight: smoothPoint(smoothedQuadRef.current.topRight, targetScreenQuad.topRight, alpha),
-              bottomRight: smoothPoint(
-                smoothedQuadRef.current.bottomRight,
-                targetScreenQuad.bottomRight,
-                alpha
-              ),
-              bottomLeft: smoothPoint(
-                smoothedQuadRef.current.bottomLeft,
-                targetScreenQuad.bottomLeft,
-                alpha
-              ),
+            const defQ = CVEngine.getDefaultQuad(video.videoWidth, video.videoHeight, targetAspect);
+            curScreen = {
+              topLeft: { x: defQ.topLeft.x * scaleX, y: defQ.topLeft.y * scaleY },
+              topRight: { x: defQ.topRight.x * scaleX, y: defQ.topRight.y * scaleY },
+              bottomRight: { x: defQ.bottomRight.x * scaleX, y: defQ.bottomRight.y * scaleY },
+              bottomLeft: { x: defQ.bottomLeft.x * scaleX, y: defQ.bottomLeft.y * scaleY },
             };
           }
 
-          const curScreen = smoothedQuadRef.current;
           const p0 = curScreen.topLeft;
           const p1 = curScreen.topRight;
           const p2 = curScreen.bottomRight;
           const p3 = curScreen.bottomLeft;
 
-          // Check corner drift across consecutive frames
-          const history = quadHistoryRef.current;
-          history.push(detected);
-          if (history.length > 6) history.shift();
-
-          let isStableCorners = false;
-          if (history.length >= 4 && isReal) {
-            let maxDrift = 0;
-            const last = history[history.length - 1];
-            for (let i = 0; i < history.length - 1; i++) {
-              const h = history[i];
-              const d0 = Math.hypot(h.topLeft.x - last.topLeft.x, h.topLeft.y - last.topLeft.y);
-              const d1 = Math.hypot(h.topRight.x - last.topRight.x, h.topRight.y - last.topRight.y);
-              const d2 = Math.hypot(
-                h.bottomRight.x - last.bottomRight.x,
-                h.bottomRight.y - last.bottomRight.y
-              );
-              const d3 = Math.hypot(
-                h.bottomLeft.x - last.bottomLeft.x,
-                h.bottomLeft.y - last.bottomLeft.y
-              );
-              const curMax = Math.max(d0, d1, d2, d3);
-              if (curMax > maxDrift) maxDrift = curMax;
-            }
-
-            // If corner drift is within 3.5% of frame width, it is steady!
-            const driftThreshold = video.videoWidth * 0.035;
-            isStableCorners = maxDrift < driftThreshold;
-          }
-
-          const isDocumentReady = isReal && quality.canAutoCapture && isStableCorners;
-
-          // 1. Draw polygon boundary with glowing aesthetics
+          // 4. Render stabilized polygon overlay
           ctx.save();
           ctx.beginPath();
           ctx.moveTo(p0.x, p0.y);
@@ -379,22 +357,22 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           ctx.lineTo(p3.x, p3.y);
           ctx.closePath();
 
-          if (isDocumentReady) {
-            ctx.strokeStyle = "#10b981"; // Emerald
+          if (trackResult.isReadyForCapture) {
+            ctx.strokeStyle = "#10b981"; // Emerald green
             ctx.lineWidth = 3.5;
-            ctx.fillStyle = "rgba(16, 185, 129, 0.18)";
+            ctx.fillStyle = "rgba(16, 185, 129, 0.22)";
             ctx.shadowColor = "#10b981";
-            ctx.shadowBlur = 12;
-          } else if (isReal) {
+            ctx.shadowBlur = 14;
+          } else if (trackResult.isDetected) {
             ctx.strokeStyle = "#3b82f6"; // Blue
             ctx.lineWidth = 2.5;
-            ctx.fillStyle = "rgba(59, 130, 246, 0.08)";
+            ctx.fillStyle = "rgba(59, 130, 246, 0.10)";
             ctx.shadowColor = "#3b82f6";
-            ctx.shadowBlur = 6;
+            ctx.shadowBlur = 8;
           } else {
             ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
             ctx.lineWidth = 1.5;
-            ctx.fillStyle = "rgba(255, 255, 255, 0.03)";
+            ctx.fillStyle = "rgba(255, 255, 255, 0.02)";
             ctx.setLineDash([6, 6]);
           }
 
@@ -402,28 +380,36 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           ctx.stroke();
           ctx.restore();
 
-          // 2. Draw 4 distinctive corner brackets
+          // 5. Draw 4 precision corner target brackets
           const drawCornerAccent = (pt: Point, angleDeg: number) => {
             ctx.save();
             ctx.translate(pt.x, pt.y);
 
-            // Outer circle
+            // Outer dot
             ctx.beginPath();
-            ctx.arc(0, 0, isDocumentReady ? 8 : 6, 0, Math.PI * 2);
-            ctx.fillStyle = isDocumentReady ? "#10b981" : isReal ? "#3b82f6" : "#ffffff";
+            ctx.arc(0, 0, trackResult.isReadyForCapture ? 8 : 6, 0, Math.PI * 2);
+            ctx.fillStyle = trackResult.isReadyForCapture
+              ? "#10b981"
+              : trackResult.isDetected
+              ? "#3b82f6"
+              : "#ffffff";
             ctx.fill();
             ctx.lineWidth = 2;
             ctx.strokeStyle = "#ffffff";
             ctx.stroke();
 
-            // Corner crosshair brackets
+            // Precision Corner angle bracket
             ctx.rotate((angleDeg * Math.PI) / 180);
             ctx.beginPath();
-            ctx.moveTo(0, 16);
+            ctx.moveTo(0, 18);
             ctx.lineTo(0, 0);
-            ctx.lineTo(16, 0);
-            ctx.strokeStyle = isDocumentReady ? "#10b981" : isReal ? "#60a5fa" : "#ffffff";
-            ctx.lineWidth = 3;
+            ctx.lineTo(18, 0);
+            ctx.strokeStyle = trackResult.isReadyForCapture
+              ? "#10b981"
+              : trackResult.isDetected
+              ? "#60a5fa"
+              : "#ffffff";
+            ctx.lineWidth = 3.5;
             ctx.lineCap = "round";
             ctx.stroke();
 
@@ -435,52 +421,53 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           drawCornerAccent(p2, 180);
           drawCornerAccent(p3, 270);
 
-          setDetectedQuad(detected);
+          setDetectedQuad(trackResult.smoothedQuad || (detection.isRealQuad ? detection.quad : null));
           setScreenQuad(curScreen);
 
-          // Update guidance message
+          // 6. Update Guidance
           if (mode === "cccd") {
-            setGuidance(
-              cardSide === "front"
-                ? isDocumentReady
-                  ? "Giữ yên để tự động chụp Mặt trước..."
+            if (cardSide === "front") {
+              setGuidance(
+                trackResult.isReadyForCapture
+                  ? "Đã sẵn sàng - Giữ yên để chụp Mặt trước..."
+                  : trackResult.isDetected
+                  ? "Giữ điện thoại ổn định để lấy nét Mặt trước"
                   : "Đưa MẶT TRƯỚC CCCD vào khung hình"
-                : isDocumentReady
-                ? "Giữ yên để tự động chụp Mặt sau..."
-                : "Đưa MẶT SAU CCCD vào khung hình"
-            );
-          } else if (mode === "driver_license") {
-            setGuidance(
-              cardSide === "front"
-                ? isDocumentReady
-                  ? "Giữ yên để tự động chụp Bằng lái..."
-                  : "Đưa MẶT TRƯỚC Bằng lái vào khung"
-                : isDocumentReady
-                ? "Giữ yên để tự động chụp Mặt sau..."
-                : "Đưa MẶT SAU Bằng lái vào khung"
-            );
-          } else {
-            if (isDocumentReady) {
-              setGuidance("Đã nhận diện chuẩn - Giữ yên để chụp...");
-            } else if (isReal) {
-              setGuidance("Giữ điện thoại ổn định để lấy nét...");
+              );
             } else {
-              setGuidance(quality.guidance);
+              setGuidance(
+                trackResult.isReadyForCapture
+                  ? "Đã sẵn sàng - Giữ yên để chụp Mặt sau..."
+                  : trackResult.isDetected
+                  ? "Giữ điện thoại ổn định để lấy nét Mặt sau"
+                  : "Đưa MẶT SAU CCCD vào khung hình"
+              );
             }
+          } else if (mode === "driver_license") {
+            if (cardSide === "front") {
+              setGuidance(
+                trackResult.isReadyForCapture
+                  ? "Đã sẵn sàng - Giữ yên để chụp Bằng lái..."
+                  : trackResult.isDetected
+                  ? "Giữ điện thoại ổn định để lấy nét"
+                  : "Đưa MẶT TRƯỚC Bằng lái vào khung"
+              );
+            } else {
+              setGuidance(
+                trackResult.isReadyForCapture
+                  ? "Đã sẵn sàng - Giữ yên để chụp Mặt sau..."
+                  : trackResult.isDetected
+                  ? "Giữ điện thoại ổn định để lấy nét"
+                  : "Đưa MẶT SAU Bằng lái vào khung"
+              );
+            }
+          } else {
+            setGuidance(trackResult.guidance);
           }
 
-          // Auto-capture countdown logic (7 consecutive steady frames ~ 0.45s)
-          if (autoCapture && isDocumentReady) {
-            localSteadyCount++;
-            setSteadyCounter(localSteadyCount);
-            if (localSteadyCount >= 7) {
-              localSteadyCount = 0;
-              setSteadyCounter(0);
-              captureFrame(detected);
-            }
-          } else {
-            localSteadyCount = Math.max(0, localSteadyCount - 1);
-            setSteadyCounter(localSteadyCount);
+          // 7. Auto Capture Triggering (Strictly when isReadyForCapture === true)
+          if (autoCapture && trackResult.isReadyForCapture && !isCapturingRef.current) {
+            captureFrame(trackResult.smoothedQuad || undefined);
           }
         }
       }
@@ -692,7 +679,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
                 setMode(item.id as ScanMode);
                 setCardSide("front");
                 setSteadyCounter(0);
-                quadHistoryRef.current = [];
+                trackerRef.current.reset();
               }}
               className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition active:scale-95 ${
                 isSelected
