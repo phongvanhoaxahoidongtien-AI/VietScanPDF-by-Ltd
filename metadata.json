@@ -1,0 +1,6 @@
+{
+  "name": "VietScanPDF",
+  "description": "Ứng dụng quét tài liệu, căn cước công dân (CCCD), bằng lái xe chuẩn A4, tạo file PDF, ghép 2 mặt thẻ và OCR tiếng Việt.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
