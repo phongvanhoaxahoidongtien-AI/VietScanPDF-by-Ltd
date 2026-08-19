@@ -82,21 +82,21 @@ export const PDFPreviewModal: React.FC<PDFPreviewModalProps> = ({ document: doc,
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-slate-950 text-white select-none">
-      {/* Top Bar */}
-      <div className="flex items-center justify-between px-4 py-3 bg-slate-900 border-b border-slate-800">
+    <div className="fixed inset-0 z-50 flex flex-col bg-slate-950 text-white select-none h-screen-dvh min-h-screen-dvh w-full overflow-hidden">
+      {/* Top Bar with Safe Area */}
+      <div className="flex items-center justify-between px-4 pt-safe pb-2.5 bg-slate-900 border-b border-slate-800">
         <button
           id="btn-pdf-back"
           onClick={onClose}
-          className="flex items-center gap-1 px-3 py-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 active:scale-95 transition text-sm font-medium"
+          className="min-w-[44px] min-h-[44px] flex items-center justify-center gap-1 px-3 py-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 active:scale-95 transition text-sm font-medium"
         >
           <ArrowLeft className="w-5 h-5" />
           <span>Quay lại</span>
         </button>
 
-        <div className="text-center">
-          <h2 className="text-sm font-bold text-white">Xuất & In File PDF</h2>
-          <p className="text-[11px] text-slate-400">
+        <div className="text-center px-2 truncate">
+          <h2 className="text-sm font-bold text-white truncate">Xuất & In File PDF</h2>
+          <p className="text-[11px] text-slate-400 truncate">
             {isCardMode ? "Chuẩn in thẻ CCCD 2 mặt trên A4" : `${doc.pages.length} trang tài liệu`}
           </p>
         </div>
@@ -104,7 +104,7 @@ export const PDFPreviewModal: React.FC<PDFPreviewModalProps> = ({ document: doc,
         <button
           id="btn-pdf-share-top"
           onClick={handleShare}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 active:scale-95 text-white text-xs font-bold shadow transition"
+          className="min-w-[44px] min-h-[44px] flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 active:scale-95 text-white text-xs font-bold shadow transition"
         >
           <Share2 className="w-4 h-4" />
           <span>Chia sẻ</span>
@@ -200,12 +200,12 @@ export const PDFPreviewModal: React.FC<PDFPreviewModalProps> = ({ document: doc,
         )}
       </div>
 
-      {/* Bottom Action Bar */}
-      <div className="flex items-center justify-around gap-3 px-6 py-4 bg-slate-900 border-t border-slate-800">
+      {/* Bottom Action Bar with Safe Area */}
+      <div className="flex items-center justify-around gap-3 px-6 pt-3 pb-safe bg-slate-900 border-t border-slate-800">
         <button
           id="btn-pdf-print"
           onClick={handlePrint}
-          className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 text-sm font-semibold transition"
+          className="flex-1 min-h-[44px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 text-sm font-semibold transition"
         >
           <Printer className="w-5 h-5 text-slate-300" />
           <span>In ngay</span>
@@ -214,7 +214,7 @@ export const PDFPreviewModal: React.FC<PDFPreviewModalProps> = ({ document: doc,
         <button
           id="btn-pdf-download"
           onClick={handleDownload}
-          className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 active:scale-95 text-white text-sm font-bold shadow-lg shadow-blue-600/30 transition"
+          className="flex-1 min-h-[44px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 active:scale-95 text-white text-sm font-bold shadow-lg shadow-blue-600/30 transition"
         >
           <Download className="w-5 h-5" />
           <span>Tải file PDF</span>

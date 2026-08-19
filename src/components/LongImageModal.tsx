@@ -52,27 +52,27 @@ export const LongImageModal: React.FC<LongImageModalProps> = ({ document: doc, o
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-slate-950 text-white select-none">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 bg-slate-900 border-b border-slate-800">
+    <div className="fixed inset-0 z-50 flex flex-col bg-slate-950 text-white select-none h-screen-dvh min-h-screen-dvh w-full overflow-hidden">
+      {/* Header with Safe Area */}
+      <div className="flex items-center justify-between px-4 pt-safe pb-2.5 bg-slate-900 border-b border-slate-800">
         <button
           id="btn-longimage-back"
           onClick={onClose}
-          className="flex items-center gap-1 px-3 py-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 active:scale-95 transition text-sm font-medium"
+          className="min-w-[44px] min-h-[44px] flex items-center justify-center gap-1 px-3 py-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 active:scale-95 transition text-sm font-medium"
         >
           <ArrowLeft className="w-5 h-5" />
           <span>Quay lại</span>
         </button>
 
-        <div className="text-center">
-          <h2 className="text-sm font-bold text-white">Ghép Ảnh Dài</h2>
-          <p className="text-[11px] text-slate-400">Ghép {doc.pages.length} trang thành 1 ảnh dọc duy nhất</p>
+        <div className="text-center px-2 truncate">
+          <h2 className="text-sm font-bold text-white truncate">Ghép Ảnh Dài</h2>
+          <p className="text-[11px] text-slate-400 truncate">Ghép {doc.pages.length} trang thành 1 ảnh dọc duy nhất</p>
         </div>
 
         <button
           id="btn-longimage-share"
           onClick={handleShare}
-          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 active:scale-95 text-white text-xs font-bold shadow transition"
+          className="min-w-[44px] min-h-[44px] flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 active:scale-95 text-white text-xs font-bold shadow transition"
         >
           <Share2 className="w-4 h-4" />
           <span>Chia sẻ</span>
@@ -87,7 +87,7 @@ export const LongImageModal: React.FC<LongImageModalProps> = ({ document: doc, o
             <span className="text-xs font-medium">Đang xử lý ghép ảnh dọc độ nét cao...</span>
           </div>
         ) : longImageDataUrl ? (
-          <div className="max-w-md w-full h-full max-h-[70vh] overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 p-2 shadow-2xl">
+          <div className="max-w-md w-full h-full max-h-[64vh] overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 p-2 shadow-2xl">
             <img
               src={longImageDataUrl}
               alt="Ảnh dài tổng hợp"
@@ -99,13 +99,13 @@ export const LongImageModal: React.FC<LongImageModalProps> = ({ document: doc, o
         )}
       </div>
 
-      {/* Bottom Download Bar */}
-      <div className="flex items-center justify-center px-6 py-4 bg-slate-900 border-t border-slate-800">
+      {/* Bottom Download Bar with Safe Area */}
+      <div className="flex items-center justify-center px-6 pt-3 pb-safe bg-slate-900 border-t border-slate-800">
         <button
           id="btn-longimage-download"
           onClick={handleDownload}
           disabled={!longImageDataUrl}
-          className="w-full max-w-sm flex items-center justify-center gap-2 py-3 px-6 rounded-xl bg-blue-600 hover:bg-blue-500 active:scale-95 text-white text-sm font-bold shadow-lg transition disabled:opacity-50"
+          className="w-full max-w-sm min-h-[44px] flex items-center justify-center gap-2 py-3 px-6 rounded-xl bg-blue-600 hover:bg-blue-500 active:scale-95 text-white text-sm font-bold shadow-lg transition disabled:opacity-50"
         >
           <Download className="w-5 h-5" />
           <span>Tải ảnh JPG về điện thoại</span>

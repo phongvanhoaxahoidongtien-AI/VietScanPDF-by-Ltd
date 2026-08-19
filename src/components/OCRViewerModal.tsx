@@ -88,28 +88,28 @@ export const OCRViewerModal: React.FC<OCRViewerModalProps> = ({ page, category =
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-slate-950 text-white select-none">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 bg-slate-900 border-b border-slate-800">
+    <div className="fixed inset-0 z-50 flex flex-col bg-slate-950 text-white select-none h-screen-dvh min-h-screen-dvh w-full overflow-hidden">
+      {/* Header with Safe Area */}
+      <div className="flex items-center justify-between px-4 pt-safe pb-2.5 bg-slate-900 border-b border-slate-800">
         <button
           id="btn-ocr-back"
           onClick={onClose}
-          className="flex items-center gap-1 px-3 py-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 active:scale-95 transition text-sm font-medium"
+          className="min-w-[44px] min-h-[44px] flex items-center justify-center gap-1 px-3 py-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 active:scale-95 transition text-sm font-medium"
         >
           <ArrowLeft className="w-5 h-5" />
           <span>Quay lại</span>
         </button>
 
-        <div className="text-center">
-          <h2 className="text-sm font-bold text-white">Trích xuất văn bản (OCR)</h2>
-          <p className="text-[11px] text-slate-400">Nhận diện chữ tiếng Việt & tiếng Anh</p>
+        <div className="text-center px-2 truncate">
+          <h2 className="text-sm font-bold text-white truncate">Trích xuất văn bản (OCR)</h2>
+          <p className="text-[11px] text-slate-400 truncate">Nhận diện chữ tiếng Việt & tiếng Anh</p>
         </div>
 
         <button
           id="btn-ocr-copy"
           onClick={handleCopy}
           disabled={!editableText}
-          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 active:scale-95 text-white text-xs font-bold shadow transition disabled:opacity-50"
+          className="min-w-[44px] min-h-[44px] flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 active:scale-95 text-white text-xs font-bold shadow transition disabled:opacity-50"
         >
           {copied ? <Check className="w-4 h-4 text-emerald-300" /> : <Copy className="w-4 h-4" />}
           <span>{copied ? "Đã chép" : "Sao chép"}</span>
@@ -214,13 +214,13 @@ export const OCRViewerModal: React.FC<OCRViewerModalProps> = ({ page, category =
         )}
       </div>
 
-      {/* Bottom Download Bar */}
-      <div className="flex items-center justify-between gap-3 px-6 py-3.5 bg-slate-900 border-t border-slate-800">
+      {/* Bottom Download Bar with Safe Area */}
+      <div className="flex items-center justify-between gap-3 px-6 pt-3 pb-safe bg-slate-900 border-t border-slate-800">
         <button
           id="btn-ocr-download-txt"
           onClick={handleDownloadTxt}
           disabled={!editableText}
-          className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 text-xs font-semibold transition disabled:opacity-50"
+          className="flex-1 min-h-[44px] flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 text-xs font-semibold transition disabled:opacity-50"
         >
           <Download className="w-4 h-4" />
           <span>Lưu file .TXT</span>
@@ -230,7 +230,7 @@ export const OCRViewerModal: React.FC<OCRViewerModalProps> = ({ page, category =
           id="btn-ocr-copy-bottom"
           onClick={handleCopy}
           disabled={!editableText}
-          className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 active:scale-95 text-white text-xs font-bold shadow transition disabled:opacity-50"
+          className="flex-1 min-h-[44px] flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 active:scale-95 text-white text-xs font-bold shadow transition disabled:opacity-50"
         >
           {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
           <span>{copied ? "Đã sao chép" : "Sao chép toàn bộ"}</span>

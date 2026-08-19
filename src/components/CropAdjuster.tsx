@@ -356,28 +356,28 @@ export const CropAdjuster: React.FC<CropAdjusterProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-slate-950 text-white select-none">
-      {/* Top Bar */}
-      <div className="flex items-center justify-between px-4 py-3 bg-slate-900/90 backdrop-blur border-b border-slate-800">
+    <div className="fixed inset-0 z-50 flex flex-col bg-slate-950 text-white select-none h-screen-dvh min-h-screen-dvh w-full overflow-hidden">
+      {/* Top Bar with Safe Area */}
+      <div className="flex items-center justify-between px-4 pt-safe pb-3 bg-slate-900/95 backdrop-blur border-b border-slate-800">
         <button
           id="btn-crop-back"
           onClick={onCancel}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition active:scale-95 text-sm font-medium"
+          className="min-w-[44px] min-h-[44px] flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition active:scale-95 text-sm font-medium"
         >
           <ArrowLeft className="w-5 h-5" />
           <span>Hủy</span>
         </button>
 
-        <div className="text-center">
-          <h2 className="text-base font-semibold text-white">Căn chỉnh 4 góc mép giấy</h2>
-          <p className="text-xs text-slate-400">Kéo các điểm tròn vào 4 góc tài liệu</p>
+        <div className="text-center px-2">
+          <h2 className="text-sm sm:text-base font-semibold text-white truncate">Căn chỉnh 4 góc mép giấy</h2>
+          <p className="text-[11px] sm:text-xs text-slate-400 truncate">Kéo các điểm tròn vào 4 góc tài liệu</p>
         </div>
 
         <button
           id="btn-crop-confirm"
           onClick={handleConfirm}
           disabled={isProcessing}
-          className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 active:scale-95 text-white text-sm font-semibold shadow-md transition disabled:opacity-50"
+          className="min-w-[44px] min-h-[44px] flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 active:scale-95 text-white text-sm font-semibold shadow-md transition disabled:opacity-50"
         >
           {isProcessing ? (
             <RefreshCw className="w-4 h-4 animate-spin" />
@@ -409,12 +409,12 @@ export const CropAdjuster: React.FC<CropAdjusterProps> = ({
         )}
       </div>
 
-      {/* Bottom Control Bar */}
-      <div className="flex items-center justify-around px-4 py-3.5 bg-slate-900 border-t border-slate-800">
+      {/* Bottom Control Bar with Safe Area */}
+      <div className="flex items-center justify-around px-4 pt-3 pb-safe bg-slate-900 border-t border-slate-800">
         <button
           id="btn-crop-auto"
           onClick={handleAutoFit}
-          className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 text-xs font-medium transition"
+          className="min-h-[44px] flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 text-xs font-medium transition"
         >
           <Sparkles className="w-4 h-4 text-blue-400" />
           <span>Tự căn góc</span>
@@ -423,7 +423,7 @@ export const CropAdjuster: React.FC<CropAdjusterProps> = ({
         <button
           id="btn-crop-reset"
           onClick={handleResetFull}
-          className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 text-xs font-medium transition"
+          className="min-h-[44px] flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 text-xs font-medium transition"
         >
           <Maximize2 className="w-4 h-4 text-slate-400" />
           <span>Toàn bộ ảnh</span>

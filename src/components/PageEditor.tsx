@@ -196,24 +196,25 @@ export const PageEditor: React.FC<PageEditorProps> = ({
   }
 
   return (
-    <div className="fixed inset-0 z-30 flex flex-col bg-slate-950 text-white select-none">
-      {/* Top App Bar */}
-      <div className="flex items-center justify-between px-4 py-3 bg-slate-900 border-b border-slate-800">
+    <div className="fixed inset-0 z-40 flex flex-col bg-slate-950 text-white select-none h-screen-dvh min-h-screen-dvh w-full overflow-hidden">
+      {/* Top App Bar with Safe Area */}
+      <div className="flex items-center justify-between px-4 pt-safe pb-2 bg-slate-900/95 backdrop-blur border-b border-slate-800">
         <button
           id="btn-editor-back"
           onClick={onBack}
-          className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 active:scale-95 transition"
+          className="min-w-[44px] min-h-[44px] flex items-center justify-center p-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 active:scale-95 transition"
+          aria-label="Quay lại"
         >
           <ArrowLeft className="w-5 h-5" />
         </button>
 
-        <div className="flex-1 mx-3 text-center">
+        <div className="flex-1 mx-3 text-center truncate">
           <input
             id="input-document-title"
             type="text"
             value={doc.title}
             onChange={(e) => handleTitleChange(e.target.value)}
-            className="w-full max-w-xs text-center text-sm font-semibold bg-transparent border-b border-transparent hover:border-slate-600 focus:border-blue-500 focus:outline-none text-white transition py-0.5"
+            className="w-full max-w-xs text-center text-sm font-semibold bg-transparent border-b border-transparent hover:border-slate-600 focus:border-blue-500 focus:outline-none text-white transition py-0.5 truncate"
             placeholder="Tên tài liệu..."
           />
           <p className="text-[11px] text-slate-400">
@@ -225,7 +226,7 @@ export const PageEditor: React.FC<PageEditorProps> = ({
         <button
           id="btn-open-pdf-preview"
           onClick={onOpenPDFPreview}
-          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 active:scale-95 text-white text-xs font-bold shadow transition"
+          className="min-w-[44px] min-h-[44px] flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 active:scale-95 text-white text-xs font-bold shadow transition"
         >
           <FileDown className="w-4 h-4" />
           <span>Tạo PDF</span>
@@ -239,7 +240,7 @@ export const PageEditor: React.FC<PageEditorProps> = ({
             <img
               src={activePage.processedImage}
               alt={`Trang ${currentPageIndex + 1}`}
-              className="max-h-[58vh] max-w-full object-contain select-none"
+              className="max-h-[52vh] max-w-full object-contain select-none"
             />
           </div>
         )}
@@ -278,11 +279,11 @@ export const PageEditor: React.FC<PageEditorProps> = ({
       </div>
 
       {/* Editing Toolbar: Rotate, Crop, OCR, Long Image */}
-      <div className="flex items-center justify-around px-2 py-2.5 bg-slate-900/90 border-t border-slate-800">
+      <div className="flex items-center justify-around px-2 py-2 bg-slate-900/90 border-t border-slate-800">
         <button
           id="btn-tool-crop"
           onClick={() => setIsCropping(true)}
-          className="flex flex-col items-center gap-1 p-2 rounded-lg text-slate-300 hover:text-white active:scale-95 transition"
+          className="min-h-[44px] flex flex-col items-center justify-center gap-1 p-2 rounded-lg text-slate-300 hover:text-white active:scale-95 transition"
         >
           <Crop className="w-5 h-5 text-blue-400" />
           <span className="text-[10px] font-medium">Cắt / Căn góc</span>
@@ -291,7 +292,7 @@ export const PageEditor: React.FC<PageEditorProps> = ({
         <button
           id="btn-tool-rotate"
           onClick={handleRotate}
-          className="flex flex-col items-center gap-1 p-2 rounded-lg text-slate-300 hover:text-white active:scale-95 transition"
+          className="min-h-[44px] flex flex-col items-center justify-center gap-1 p-2 rounded-lg text-slate-300 hover:text-white active:scale-95 transition"
         >
           <RotateCw className="w-5 h-5 text-blue-400" />
           <span className="text-[10px] font-medium">Xoay 90°</span>
@@ -300,7 +301,7 @@ export const PageEditor: React.FC<PageEditorProps> = ({
         <button
           id="btn-tool-ocr"
           onClick={() => activePage && onOpenOCR(activePage)}
-          className="flex flex-col items-center gap-1 p-2 rounded-lg text-slate-300 hover:text-white active:scale-95 transition"
+          className="min-h-[44px] flex flex-col items-center justify-center gap-1 p-2 rounded-lg text-slate-300 hover:text-white active:scale-95 transition"
         >
           <Type className="w-5 h-5 text-emerald-400" />
           <span className="text-[10px] font-medium">Đọc chữ OCR</span>
@@ -310,7 +311,7 @@ export const PageEditor: React.FC<PageEditorProps> = ({
           <button
             id="btn-tool-longimage"
             onClick={onOpenLongImage}
-            className="flex flex-col items-center gap-1 p-2 rounded-lg text-slate-300 hover:text-white active:scale-95 transition"
+            className="min-h-[44px] flex flex-col items-center justify-center gap-1 p-2 rounded-lg text-slate-300 hover:text-white active:scale-95 transition"
           >
             <Layers className="w-5 h-5 text-amber-400" />
             <span className="text-[10px] font-medium">Ghép ảnh dài</span>
@@ -320,15 +321,15 @@ export const PageEditor: React.FC<PageEditorProps> = ({
         <button
           id="btn-tool-delete-page"
           onClick={handleDeletePage}
-          className="flex flex-col items-center gap-1 p-2 rounded-lg text-slate-300 hover:text-red-400 active:scale-95 transition"
+          className="min-h-[44px] flex flex-col items-center justify-center gap-1 p-2 rounded-lg text-slate-300 hover:text-red-400 active:scale-95 transition"
         >
           <Trash2 className="w-5 h-5 text-red-400" />
           <span className="text-[10px] font-medium">Xóa trang</span>
         </button>
       </div>
 
-      {/* Bottom Thumbnail Strip & Add Page Button */}
-      <div className="flex items-center gap-3 px-4 py-3 bg-slate-950 border-t border-slate-800 overflow-x-auto no-scrollbar">
+      {/* Bottom Thumbnail Strip & Add Page Button with Safe Area */}
+      <div className="flex items-center gap-3 px-4 pt-2.5 pb-safe bg-slate-950 border-t border-slate-800 overflow-x-auto no-scrollbar">
         {doc.pages.map((p, idx) => {
           const isSelected = idx === currentPageIndex;
           return (

@@ -15,12 +15,12 @@ export const BottomNav: React.FC<BottomNavProps> = ({
   documentsCount,
 }) => {
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-20 flex items-center justify-around px-4 py-2 bg-slate-900/95 backdrop-blur-lg border-t border-slate-800 select-none max-w-4xl mx-auto">
+    <div className="fixed bottom-0 left-0 right-0 z-20 flex items-center justify-around px-4 pt-2 pb-safe bg-slate-900/95 backdrop-blur-lg border-t border-slate-800 select-none max-w-4xl mx-auto">
       {/* Home Tab */}
       <button
         id="nav-tab-home"
         onClick={() => onChangeTab("home")}
-        className={`flex flex-col items-center gap-1 p-2 rounded-xl transition active:scale-95 ${
+        className={`min-h-[44px] flex flex-col items-center justify-center gap-1 p-2 rounded-xl transition active:scale-95 ${
           activeTab === "home" ? "text-blue-500 font-semibold" : "text-slate-400 hover:text-slate-200"
         }`}
       >
@@ -35,6 +35,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
           onClick={onOpenQuickScan}
           className="group relative flex items-center justify-center w-14 h-14 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-500 text-white shadow-xl shadow-blue-600/40 border-4 border-slate-950 active:scale-90 transition transform"
           title="Mở camera quét tài liệu"
+          aria-label="Mở máy ảnh"
         >
           <Camera className="w-6 h-6 group-hover:scale-110 transition duration-200" />
         </button>
@@ -44,7 +45,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
       <button
         id="nav-tab-documents"
         onClick={() => onChangeTab("documents")}
-        className={`relative flex flex-col items-center gap-1 p-2 rounded-xl transition active:scale-95 ${
+        className={`min-h-[44px] relative flex flex-col items-center justify-center gap-1 p-2 rounded-xl transition active:scale-95 ${
           activeTab === "documents" ? "text-blue-500 font-semibold" : "text-slate-400 hover:text-slate-200"
         }`}
       >
@@ -63,7 +64,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
       <button
         id="nav-tab-settings"
         onClick={() => onChangeTab("settings")}
-        className={`flex flex-col items-center gap-1 p-2 rounded-xl transition active:scale-95 ${
+        className={`min-h-[44px] flex flex-col items-center justify-center gap-1 p-2 rounded-xl transition active:scale-95 ${
           activeTab === "settings" ? "text-blue-500 font-semibold" : "text-slate-400 hover:text-slate-200"
         }`}
       >
