@@ -8,6 +8,7 @@ import {
   Share2,
   AlertCircle,
   X,
+  ArrowLeft,
   Trash2,
   ChevronLeft,
   ChevronRight,
@@ -434,17 +435,25 @@ export const PDFHighlightModal: React.FC<PDFHighlightModalProps> = ({ onClose })
   const canRedo = currentPage && (redoMap[currentPage.id] || []).length > 0;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-950/90 backdrop-blur-md select-none">
-      <div className="relative w-full max-w-5xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col h-[94vh] max-h-[94vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 pt-safe-top pb-safe bg-slate-950/90 backdrop-blur-md select-none">
+      <div className="relative w-full max-w-5xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col h-[90vh] max-h-[90vh]">
         {/* Modal Header */}
-        <div className="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-slate-800 bg-slate-900/95 shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-2xl bg-amber-500/20 text-amber-400 border border-amber-500/30">
-              <Highlighter className="w-5 h-5" />
+        <div className="flex items-center justify-between px-3 sm:px-5 py-3 border-b border-slate-800 bg-slate-900/95 shrink-0 gap-2">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <button
+              id="btn-pdf-highlight-back"
+              onClick={onClose}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 active:bg-slate-700 border border-slate-700/80 text-slate-100 hover:text-white active:scale-95 transition text-xs font-semibold shadow-sm min-h-[40px]"
+            >
+              <ArrowLeft className="w-4 h-4 text-amber-400" />
+              <span>Quay lại</span>
+            </button>
+            <div className="hidden xs:flex p-2 rounded-2xl bg-amber-500/20 text-amber-400 border border-amber-500/30">
+              <Highlighter className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-white">Highlight PDF (Bôi vàng & Đánh dấu)</h3>
-              <p className="text-xs text-slate-400">
+              <h3 className="text-sm sm:text-base font-bold text-white leading-tight">Highlight PDF (Bôi đậm & Tô chữ)</h3>
+              <p className="text-[11px] sm:text-xs text-slate-400 hidden sm:block">
                 Xem toàn bộ các trang, phóng to tô từng dòng chữ nhỏ, xoay & cắt trang linh hoạt
               </p>
             </div>
@@ -453,6 +462,7 @@ export const PDFHighlightModal: React.FC<PDFHighlightModalProps> = ({ onClose })
           <button
             onClick={onClose}
             className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"
+            title="Đóng"
           >
             <X className="w-5 h-5" />
           </button>

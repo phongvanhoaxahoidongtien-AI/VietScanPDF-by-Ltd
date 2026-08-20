@@ -358,14 +358,14 @@ export const CropAdjuster: React.FC<CropAdjusterProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-slate-950 text-white select-none h-screen-dvh min-h-screen-dvh w-full overflow-hidden">
       {/* Top Bar with Safe Area */}
-      <div className="flex items-center justify-between px-4 pt-safe pb-3 bg-slate-900/95 backdrop-blur border-b border-slate-800">
+      <div className="flex items-center justify-between px-4 pt-safe-top pb-3 bg-slate-900/95 backdrop-blur border-b border-slate-800 shrink-0">
         <button
           id="btn-crop-back"
           onClick={onCancel}
-          className="min-w-[44px] min-h-[44px] flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition active:scale-95 text-sm font-medium"
+          className="min-w-[44px] min-h-[44px] flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 active:bg-slate-700 border border-slate-700/80 text-slate-100 hover:text-white active:scale-95 transition text-xs font-semibold shadow-sm"
         >
-          <ArrowLeft className="w-5 h-5" />
-          <span>Hủy</span>
+          <ArrowLeft className="w-5 h-5 text-blue-400" />
+          <span>Quay lại</span>
         </button>
 
         <div className="text-center px-2">

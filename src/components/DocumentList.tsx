@@ -76,7 +76,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({
   };
 
   return (
-    <div className="flex flex-col flex-1 w-full max-w-4xl mx-auto px-4 py-4 pb-24 select-none">
+    <div className="flex flex-col flex-1 w-full max-w-4xl mx-auto px-4 pt-safe-top pb-24 select-none">
       {/* Search and Filter Bar */}
       <div className="flex flex-col gap-3 mb-5">
         <div className="relative w-full">

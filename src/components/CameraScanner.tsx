@@ -649,16 +649,17 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
       )}
 
       {/* Top Header Bar */}
-      <div className="relative z-50 flex items-center justify-between px-4 pt-safe pb-2 bg-gradient-to-b from-black/90 via-black/50 to-transparent">
+      <div className="relative z-50 flex items-center justify-between px-4 pt-safe-top pb-3 bg-gradient-to-b from-black/95 via-black/70 to-transparent">
         {/* Back / Close Button */}
         <button
           id="btn-camera-close"
           onClick={onClose}
-          className="min-w-[44px] min-h-[44px] flex items-center justify-center p-2.5 rounded-full bg-slate-900/80 backdrop-blur-md text-white hover:bg-slate-800 transition active:scale-95 border border-slate-700/50 shadow-md"
-          title="Đóng máy ảnh"
-          aria-label="Đóng máy ảnh"
+          className="min-w-[44px] min-h-[44px] flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-slate-900/90 backdrop-blur-md text-white hover:bg-slate-800 transition active:scale-95 border border-slate-700/60 shadow-lg"
+          title="Quay lại màn hình chính"
+          aria-label="Quay lại"
         >
           <ArrowLeft className="w-5 h-5 text-white" />
+          <span className="text-xs font-semibold hidden xs:inline">Quay lại</span>
         </button>
 
         {/* Guidance Pill */}

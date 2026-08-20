@@ -372,13 +372,14 @@ export const PDFPageCropModal: React.FC<PDFPageCropModalProps> = ({
   return (
     <div className="fixed inset-0 z-[60] flex flex-col bg-slate-950 text-white select-none overflow-hidden">
       {/* Header */}
-      <div className="sticky top-0 z-20 flex items-center justify-between px-4 py-3 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 shrink-0">
+      <div className="sticky top-0 z-20 flex items-center justify-between px-4 pt-safe-top pb-3 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 shrink-0">
         <button
+          id="btn-pdf-page-crop-back"
           onClick={onCancel}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-white transition text-xs font-semibold"
+          className="min-w-[44px] min-h-[44px] flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 active:bg-slate-700 border border-slate-700/80 text-slate-100 hover:text-white active:scale-95 transition text-xs font-semibold shadow-sm"
         >
-          <ArrowLeft className="w-4 h-4" />
-          <span>Hủy</span>
+          <ArrowLeft className="w-4 h-4 text-blue-400" />
+          <span>Quay lại</span>
         </button>
 
         <div className="text-center">

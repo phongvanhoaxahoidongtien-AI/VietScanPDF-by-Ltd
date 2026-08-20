@@ -70,23 +70,31 @@ export const PageReorderModal: React.FC<PageReorderModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md select-none">
-      <div className="relative w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 pt-safe-top pb-safe bg-slate-950/85 backdrop-blur-md select-none">
+      <div className="relative w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[88vh]">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 bg-slate-900/90">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-2xl bg-blue-600/20 text-blue-400 border border-blue-500/30">
-              <Move className="w-5 h-5" />
+        <div className="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-4 border-b border-slate-800 bg-slate-900/90 gap-2">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <button
+              onClick={onClose}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 active:bg-slate-700 border border-slate-700/80 text-slate-100 hover:text-white active:scale-95 transition text-xs font-semibold shadow-sm min-h-[40px]"
+            >
+              <ArrowLeft className="w-4 h-4 text-blue-400" />
+              <span>Quay lại</span>
+            </button>
+            <div className="hidden xs:flex p-2 rounded-xl bg-blue-600/20 text-blue-400 border border-blue-500/30">
+              <Move className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-white">Sắp xếp thứ tự các trang</h3>
-              <p className="text-xs text-slate-400">Kéo thả thẻ trang để thay đổi vị trí trong tài liệu PDF</p>
+              <h3 className="text-sm sm:text-base font-bold text-white">Sắp xếp thứ tự các trang</h3>
+              <p className="text-[11px] sm:text-xs text-slate-400 hidden sm:block">Kéo thả thẻ trang để thay đổi vị trí</p>
             </div>
           </div>
 
           <button
             onClick={onClose}
             className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"
+            title="Đóng"
           >
             <X className="w-5 h-5" />
           </button>

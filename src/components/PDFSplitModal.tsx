@@ -9,6 +9,7 @@ import {
   Share2,
   AlertCircle,
   X,
+  ArrowLeft,
   RotateCw,
   Crop,
   Eye,
@@ -224,18 +225,26 @@ export const PDFSplitModal: React.FC<PDFSplitModalProps> = ({ onClose }) => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-slate-950/90 backdrop-blur-md select-none">
-      <div className="relative w-full max-w-4xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col h-[92vh] max-h-[92vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 pt-safe-top pb-safe bg-slate-950/90 backdrop-blur-md select-none">
+      <div className="relative w-full max-w-4xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col h-[90vh] max-h-[90vh]">
         {/* Modal Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 bg-slate-900/95 shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-2xl bg-emerald-600/20 text-emerald-400 border border-emerald-500/30">
-              <Scissors className="w-5 h-5" />
+        <div className="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-4 border-b border-slate-800 bg-slate-900/95 shrink-0 gap-2">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <button
+              id="btn-pdf-split-back"
+              onClick={onClose}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 active:bg-slate-700 border border-slate-700/80 text-slate-100 hover:text-white active:scale-95 transition text-xs font-semibold shadow-sm min-h-[40px]"
+            >
+              <ArrowLeft className="w-4 h-4 text-emerald-400" />
+              <span>Quay lại</span>
+            </button>
+            <div className="hidden xs:flex p-2 rounded-xl bg-emerald-600/20 text-emerald-400 border border-emerald-500/30">
+              <Scissors className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-white">Tách trang PDF (PDF Split)</h3>
-              <p className="text-xs text-slate-400">
-                Xem toàn bộ trang, tự do chọn trang, xoay 90° và cắt (crop) từng trang trước khi tách
+              <h3 className="text-sm sm:text-base font-bold text-white leading-tight">Tách trang PDF (Split)</h3>
+              <p className="text-[11px] sm:text-xs text-slate-400 hidden sm:block">
+                Xem toàn bộ trang, chọn trang, xoay 90° & cắt trang
               </p>
             </div>
           </div>
@@ -243,6 +252,7 @@ export const PDFSplitModal: React.FC<PDFSplitModalProps> = ({ onClose }) => {
           <button
             onClick={onClose}
             className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"
+            title="Đóng"
           >
             <X className="w-5 h-5" />
           </button>

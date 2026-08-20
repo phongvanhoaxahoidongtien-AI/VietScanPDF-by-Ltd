@@ -44,7 +44,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onViewAllDocuments,
 }) => {
   return (
-    <div className="flex flex-col flex-1 w-full max-w-4xl mx-auto px-4 py-5 pb-28 select-none">
+    <div className="flex flex-col flex-1 w-full max-w-4xl mx-auto px-4 pt-safe-top pb-28 select-none">
       {/* Header Greeting */}
       <div className="flex items-center justify-between mb-5">
         <div>

@@ -57,7 +57,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onClearAl
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-slate-950 text-white select-none overflow-hidden">
       {/* Header with Safe Area spacing and robust touch target */}
-      <div className="sticky top-0 z-20 flex items-center justify-between px-4 py-3 sm:py-4 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 shadow-md shrink-0">
+      <div className="sticky top-0 z-20 flex items-center justify-between px-4 pt-safe-top pb-3 sm:pb-4 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 shadow-md shrink-0">
         <button
           id="btn-settings-back"
           onClick={onClose}
