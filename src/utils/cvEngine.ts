@@ -11,12 +11,23 @@ export interface DetectedQuadResult {
   confidence: number;
   isClear: boolean;
   isRealQuad: boolean;
+  score: number;
 }
 
 export class CVEngine {
   /**
    * Fast real-time edge & quadrilateral document boundary detection from video or canvas
-   * Uses grayscale -> Gaussian blur -> Sobel gradient & adaptive threshold -> contour extraction -> RDP polygon approximation
+   * Pipeline:
+   * 1. Frame Downscaling & Normalization (for 60 FPS performance)
+   * 2. Grayscale & Noise Reduction (Gaussian blur)
+   * 3. Sobel Edge Gradient Magnitude & Adaptive Thresholding
+   * 4. Morphological Dilation/Closing (connect document boundary lines)
+   * 5. Topological Contour Extraction (Connected Component BFS)
+   * 6. Convex Hull & Polygon Simplification (Ramer-Douglas-Peucker)
+   * 7. Corner Refinement via Boundary Segment Line Intersections
+   * 8. Geometric Validation (convexity, non-self-intersection, angles, area ratio)
+   * 9. Multi-Factor Candidate Scoring (Area + Orthogonality + Parallelism + Edge Gradient)
+   * 10. Deterministic Corner Ordering (TopLeft, TopRight, BottomRight, BottomLeft)
    */
   static detectDocumentQuad(
     sourceCanvas: HTMLCanvasElement | HTMLVideoElement | CanvasImageSource,
@@ -30,11 +41,12 @@ export class CVEngine {
         confidence: 0,
         isClear: false,
         isRealQuad: false,
+        score: 0,
       };
     }
 
-    // Process on a downscaled canvas (approx. 280-320px width) for ultra-fast 60fps execution (<6ms per frame)
-    const targetWorkWidth = 280;
+    // Process on a downscaled canvas (approx. 280-320px width) for ultra-fast execution (<6ms per frame)
+    const targetWorkWidth = 300;
     const scale = Math.min(1, targetWorkWidth / srcWidth);
     const workW = Math.max(80, Math.round(srcWidth * scale));
     const workH = Math.max(60, Math.round(srcHeight * scale));
@@ -50,6 +62,7 @@ export class CVEngine {
         confidence: 0,
         isClear: false,
         isRealQuad: false,
+        score: 0,
       };
     }
 
@@ -57,17 +70,23 @@ export class CVEngine {
     const imgData = ctx.getImageData(0, 0, workW, workH);
     const data = imgData.data;
 
-    // 1. Grayscale conversion
+    // 1. Grayscale conversion & Luma distribution analysis
     const gray = new Uint8Array(workW * workH);
     let totalLuma = 0;
+    let minLuma = 255;
+    let maxLuma = 0;
+
     for (let i = 0; i < data.length; i += 4) {
       const luma = (data[i] * 77 + data[i + 1] * 150 + data[i + 2] * 29) >> 8;
       gray[i / 4] = luma;
       totalLuma += luma;
+      if (luma < minLuma) minLuma = luma;
+      if (luma > maxLuma) maxLuma = luma;
     }
     const avgLuma = totalLuma / (workW * workH);
+    const lumaRange = Math.max(20, maxLuma - minLuma);
 
-    // 2. 3x3 Gaussian Blur to remove paper print noise & text lines
+    // 2. 3x3 Gaussian Blur to remove paper print noise & fine text lines
     const blurred = new Uint8Array(workW * workH);
     for (let y = 1; y < workH - 1; y++) {
       const rowPrev = (y - 1) * workW;
@@ -90,10 +109,10 @@ export class CVEngine {
       }
     }
 
-    // 3. Sobel Gradient Magnitude & Binary Edge Map
+    // 3. Sobel Gradient Magnitude & Multi-Threshold Edge Extraction
     const edges = new Uint8Array(workW * workH);
-    let edgeCount = 0;
-    const threshold = Math.max(22, Math.min(50, avgLuma * 0.35));
+    const gradMagnitudes = new Uint8Array(workW * workH);
+    const edgeThreshold = Math.max(18, Math.min(48, lumaRange * 0.22));
 
     for (let y = 1; y < workH - 1; y++) {
       const rowPrev = (y - 1) * workW;
@@ -113,14 +132,14 @@ export class CVEngine {
           (blurred[rowPrev + x - 1] + 2 * blurred[rowPrev + x] + blurred[rowPrev + x + 1]);
 
         const mag = (Math.abs(gx) + Math.abs(gy)) >> 2;
-        if (mag > threshold) {
+        gradMagnitudes[rowCurr + x] = mag;
+        if (mag > edgeThreshold) {
           edges[rowCurr + x] = 255;
-          edgeCount++;
         }
       }
     }
 
-    // 4. Morphological Dilation to connect broken paper boundaries
+    // 4. Morphological Dilation / Bridge to connect broken document boundary segments
     const dilatedEdges = new Uint8Array(workW * workH);
     for (let y = 1; y < workH - 1; y++) {
       for (let x = 1; x < workW - 1; x++) {
@@ -137,30 +156,28 @@ export class CVEngine {
       }
     }
 
-    // 5. Find connected boundary points & candidate document contours
+    // 5. Find connected boundary contours using 8-connectivity BFS
     const visited = new Uint8Array(workW * workH);
     const contours: Point[][] = [];
-    const minContourPoints = 30;
+    const minContourPoints = 25;
 
-    const marginX = Math.round(workW * 0.03);
-    const marginY = Math.round(workH * 0.03);
+    const marginX = Math.round(workW * 0.02);
+    const marginY = Math.round(workH * 0.02);
 
     for (let y = marginY; y < workH - marginY; y += 2) {
       for (let x = marginX; x < workW - marginX; x += 2) {
         const idx = y * workW + x;
         if (dilatedEdges[idx] === 255 && visited[idx] === 0) {
-          // Trace contour using 8-connectivity BFS
           const contour: Point[] = [];
           const queue: number[] = [idx];
           visited[idx] = 1;
 
-          while (queue.length > 0 && contour.length < 1200) {
+          while (queue.length > 0 && contour.length < 1500) {
             const currIdx = queue.pop()!;
             const cx = currIdx % workW;
             const cy = Math.floor(currIdx / workW);
             contour.push({ x: cx, y: cy });
 
-            // Check 8 neighbors
             const neighbors = [
               currIdx - 1,
               currIdx + 1,
@@ -192,52 +209,58 @@ export class CVEngine {
       }
     }
 
-    // 6. Find and evaluate candidate quadrilateral polygons with multi-factor scoring
+    // 6. Evaluate candidate contours with Multi-Factor Scoring & Line-Intersection Refinement
     let bestQuad: QuadPoints | null = null;
     let bestScore = 0;
     const totalArea = workW * workH;
 
     for (const contour of contours) {
-      // Find bounding envelope & approximate polygon
       const hull = this.convexHull(contour);
       if (hull.length < 4) continue;
 
-      const area = this.polygonArea(hull);
-      const areaRatio = area / totalArea;
+      const hullArea = this.polygonArea(hull);
+      const areaRatio = hullArea / totalArea;
 
-      // Document must take between 12% and 92% of camera frame
-      if (areaRatio < 0.12 || areaRatio > 0.92) continue;
+      // Document must take between 10% and 94% of camera frame
+      if (areaRatio < 0.10 || areaRatio > 0.94) continue;
 
       // Simplify polygon with RDP
       const perimeter = this.polygonPerimeter(hull);
-      const epsilon = Math.max(2, perimeter * 0.035);
+      const epsilon = Math.max(1.8, perimeter * 0.032);
       const approx = this.ramerDouglasPeucker(hull, epsilon);
 
       let quadCandidate: Point[] | null = null;
 
       if (approx.length === 4) {
         quadCandidate = approx;
-      } else if (approx.length > 4 && approx.length <= 8) {
-        // Reduce to 4 dominant corners
+      } else if (approx.length >= 5 && approx.length <= 9) {
         quadCandidate = this.reduceTo4Corners(approx);
-      } else if (hull.length >= 4) {
-        // Fallback to 4 extreme directional points of convex hull
+      } else {
         quadCandidate = this.extractExtremeCorners(hull);
       }
 
       if (quadCandidate && quadCandidate.length === 4) {
-        const sortedQuad = this.orderQuadPoints(quadCandidate);
+        // Refine corners via segment edge gradient alignment
+        const refinedQuad = this.refineCornerPrecision(quadCandidate, gradMagnitudes, workW, workH);
+        const sortedQuad = this.orderQuadPoints(refinedQuad);
+
         if (this.isValidConvexQuad(sortedQuad, workW, workH)) {
-          // Multi-factor Scoring:
-          // 1. Area ratio (prefer 25% to 85%)
+          // Compute Multi-Factor Score:
+          // 1. Area Ratio Score (optimal is 25% - 85%)
           const qArea = this.quadArea(sortedQuad);
           const qAreaRatio = qArea / totalArea;
-          const areaScore = Math.min(1, qAreaRatio / 0.65);
+          const areaScore = Math.min(1, qAreaRatio / 0.60);
 
-          // 2. Orthogonality / Rectangularity score
+          // 2. Orthogonality Score (angles close to 90°)
           const orthoScore = this.calculateOrthogonalityScore(sortedQuad);
 
-          // 3. Aspect Ratio closeness
+          // 3. Parallelism Score (opposite edges close in length & direction)
+          const parallelScore = this.calculateParallelismScore(sortedQuad);
+
+          // 4. Edge Gradient Quality Score along the 4 quadrilateral lines
+          const edgeScore = this.evaluateEdgeGradientQuality(sortedQuad, gradMagnitudes, workW, workH);
+
+          // 5. Aspect Ratio Score
           const wTop = Math.hypot(sortedQuad.topRight.x - sortedQuad.topLeft.x, sortedQuad.topRight.y - sortedQuad.topLeft.y);
           const wBot = Math.hypot(sortedQuad.bottomRight.x - sortedQuad.bottomLeft.x, sortedQuad.bottomRight.y - sortedQuad.bottomLeft.y);
           const hLeft = Math.hypot(sortedQuad.bottomLeft.x - sortedQuad.topLeft.x, sortedQuad.bottomLeft.y - sortedQuad.topLeft.y);
@@ -247,9 +270,15 @@ export class CVEngine {
           const aspect = Math.max(avgW, avgH) / Math.max(1, Math.min(avgW, avgH));
           const targetRatio = targetAspect === "card" ? 1.586 : 1.414;
           const aspectDiff = Math.abs(aspect - targetRatio);
-          const aspectScore = Math.max(0, 1 - aspectDiff * 0.8);
+          const aspectScore = Math.max(0, 1 - aspectDiff * 0.65);
 
-          const compositeScore = areaScore * 0.40 + orthoScore * 0.40 + aspectScore * 0.20;
+          // Weighted composite candidate score
+          const compositeScore =
+            areaScore * 0.25 +
+            orthoScore * 0.30 +
+            parallelScore * 0.20 +
+            edgeScore * 0.15 +
+            aspectScore * 0.10;
 
           if (compositeScore > bestScore) {
             bestScore = compositeScore;
@@ -264,29 +293,29 @@ export class CVEngine {
       const brightQuad = this.findBrightDocumentRegionQuad(blurred, workW, workH, avgLuma);
       if (brightQuad) {
         bestQuad = brightQuad;
-        bestScore = 0.58;
+        bestScore = 0.52;
       }
     }
 
     // 8. Scale points back to original video/canvas coordinate space
     const invScale = 1 / scale;
-    if (bestQuad && bestScore > 0.35) {
+    if (bestQuad && bestScore >= 0.38) {
       const fullQuad: QuadPoints = {
         topLeft: {
-          x: Math.max(0, Math.min(srcWidth, bestQuad.topLeft.x * invScale)),
-          y: Math.max(0, Math.min(srcHeight, bestQuad.topLeft.y * invScale)),
+          x: Math.max(0, Math.min(srcWidth, Math.round(bestQuad.topLeft.x * invScale))),
+          y: Math.max(0, Math.min(srcHeight, Math.round(bestQuad.topLeft.y * invScale))),
         },
         topRight: {
-          x: Math.max(0, Math.min(srcWidth, bestQuad.topRight.x * invScale)),
-          y: Math.max(0, Math.min(srcHeight, bestQuad.topRight.y * invScale)),
+          x: Math.max(0, Math.min(srcWidth, Math.round(bestQuad.topRight.x * invScale))),
+          y: Math.max(0, Math.min(srcHeight, Math.round(bestQuad.topRight.y * invScale))),
         },
         bottomRight: {
-          x: Math.max(0, Math.min(srcWidth, bestQuad.bottomRight.x * invScale)),
-          y: Math.max(0, Math.min(srcHeight, bestQuad.bottomRight.y * invScale)),
+          x: Math.max(0, Math.min(srcWidth, Math.round(bestQuad.bottomRight.x * invScale))),
+          y: Math.max(0, Math.min(srcHeight, Math.round(bestQuad.bottomRight.y * invScale))),
         },
         bottomLeft: {
-          x: Math.max(0, Math.min(srcWidth, bestQuad.bottomLeft.x * invScale)),
-          y: Math.max(0, Math.min(srcHeight, bestQuad.bottomLeft.y * invScale)),
+          x: Math.max(0, Math.min(srcWidth, Math.round(bestQuad.bottomLeft.x * invScale))),
+          y: Math.max(0, Math.min(srcHeight, Math.round(bestQuad.bottomLeft.y * invScale))),
         },
       };
 
@@ -297,23 +326,112 @@ export class CVEngine {
         fullQuad.bottomLeft,
       ]);
 
-      const confidence = Math.min(0.96, Math.max(0.40, bestScore));
+      const confidence = Math.min(0.98, Math.max(0.45, bestScore));
 
       return {
         quad: normalizedFullQuad,
         confidence,
         isClear: true,
         isRealQuad: true,
+        score: bestScore,
       };
     }
 
     // Default fallback frame
     return {
       quad: this.getDefaultQuad(srcWidth, srcHeight, targetAspect),
-      confidence: 0.25,
+      confidence: 0.20,
       isClear: false,
       isRealQuad: false,
+      score: 0,
     };
+  }
+
+  /**
+   * Refine 4 corner points to snap directly onto gradient peaks
+   */
+  private static refineCornerPrecision(
+    pts: Point[],
+    gradMag: Uint8Array,
+    w: number,
+    h: number
+  ): Point[] {
+    const searchRadius = 4;
+    return pts.map((p) => {
+      let maxGrad = -1;
+      let bestX = p.x;
+      let bestY = p.y;
+
+      for (let dy = -searchRadius; dy <= searchRadius; dy++) {
+        for (let dx = -searchRadius; dx <= searchRadius; dx++) {
+          const nx = Math.round(p.x + dx);
+          const ny = Math.round(p.y + dy);
+          if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+            const mag = gradMag[ny * w + nx];
+            if (mag > maxGrad) {
+              maxGrad = mag;
+              bestX = nx;
+              bestY = ny;
+            }
+          }
+        }
+      }
+
+      return { x: bestX, y: bestY };
+    });
+  }
+
+  /**
+   * Evaluate edge gradient quality along the 4 quadrilateral lines
+   */
+  private static evaluateEdgeGradientQuality(
+    q: QuadPoints,
+    gradMag: Uint8Array,
+    w: number,
+    h: number
+  ): number {
+    const edges = [
+      [q.topLeft, q.topRight],
+      [q.topRight, q.bottomRight],
+      [q.bottomRight, q.bottomLeft],
+      [q.bottomLeft, q.topLeft],
+    ];
+
+    let totalEdgeStrength = 0;
+    const samplesPerEdge = 12;
+
+    for (const [p1, p2] of edges) {
+      let edgeSum = 0;
+      for (let s = 1; s <= samplesPerEdge; s++) {
+        const t = s / (samplesPerEdge + 1);
+        const sx = Math.round(p1.x + (p2.x - p1.x) * t);
+        const sy = Math.round(p1.y + (p2.y - p1.y) * t);
+        if (sx >= 0 && sx < w && sy >= 0 && sy < h) {
+          edgeSum += gradMag[sy * w + sx];
+        }
+      }
+      totalEdgeStrength += edgeSum / samplesPerEdge;
+    }
+
+    const avgEdgeMag = totalEdgeStrength / 4;
+    return Math.min(1, avgEdgeMag / 45);
+  }
+
+  /**
+   * Measure parallelism between opposite edges (0.0 to 1.0)
+   */
+  private static calculateParallelismScore(q: QuadPoints): number {
+    const topW = Math.hypot(q.topRight.x - q.topLeft.x, q.topRight.y - q.topLeft.y);
+    const botW = Math.hypot(q.bottomRight.x - q.bottomLeft.x, q.bottomRight.y - q.bottomLeft.y);
+    const leftH = Math.hypot(q.bottomLeft.x - q.topLeft.x, q.bottomLeft.y - q.topLeft.y);
+    const rightH = Math.hypot(q.bottomRight.x - q.topRight.x, q.bottomRight.y - q.topRight.y);
+
+    if (topW === 0 || botW === 0 || leftH === 0 || rightH === 0) return 0;
+
+    const widthRatio = Math.min(topW, botW) / Math.max(topW, botW);
+    const heightRatio = Math.min(leftH, rightH) / Math.max(leftH, rightH);
+
+    return (widthRatio + heightRatio) / 2;
   }
 
   /**
@@ -337,10 +455,8 @@ export class CVEngine {
       const len2 = Math.hypot(v2x, v2y);
       if (len1 === 0 || len2 === 0) continue;
 
-      // Cosine of angle: dot product / (|v1|*|v2|)
       const cosTheta = Math.abs((v1x * v2x + v1y * v2y) / (len1 * len2));
-      // For 90 degrees, cosTheta is 0. Score is 1 - cosTheta.
-      const angleScore = Math.max(0, 1 - cosTheta * 1.5);
+      const angleScore = Math.max(0, 1 - cosTheta * 1.6);
       totalScore += angleScore;
     }
 
@@ -356,7 +472,7 @@ export class CVEngine {
     h: number,
     avgLuma: number
   ): QuadPoints | null {
-    const threshold = Math.min(200, Math.max(90, avgLuma * 1.15));
+    const threshold = Math.min(210, Math.max(95, avgLuma * 1.15));
     let minX = w,
       maxX = 0,
       minY = h,
@@ -382,7 +498,7 @@ export class CVEngine {
     const totalArea = w * h;
     const ratio = docArea / totalArea;
 
-    if (ratio > 0.15 && ratio < 0.92 && count > 150) {
+    if (ratio > 0.12 && ratio < 0.94 && count > 150) {
       return {
         topLeft: { x: minX, y: minY },
         topRight: { x: maxX, y: minY },
@@ -489,7 +605,7 @@ export class CVEngine {
   }
 
   /**
-   * Reduce arbitrary N-gon (5-8 points) to 4 most significant corners
+   * Reduce arbitrary N-gon (5-9 points) to 4 most significant corners
    */
   private static reduceTo4Corners(points: Point[]): Point[] {
     const centroid = points.reduce(
@@ -497,8 +613,7 @@ export class CVEngine {
       { x: 0, y: 0 }
     );
 
-    // Pick 1 point in each of the 4 quadrants relative to centroid that has max distance
-    const quadPoints: (Point | null)[] = [null, null, null, null]; // TL (Q2), TR (Q1), BR (Q4), BL (Q3)
+    const quadPoints: (Point | null)[] = [null, null, null, null];
     const maxDist = [-1, -1, -1, -1];
 
     for (const p of points) {
@@ -525,7 +640,7 @@ export class CVEngine {
   }
 
   /**
-   * Extract 4 extreme points (min/max X+Y and X-Y) from hull
+   * Extract 4 extreme points from hull
    */
   private static extractExtremeCorners(points: Point[]): Point[] {
     let tl = points[0],
@@ -579,23 +694,26 @@ export class CVEngine {
   }
 
   /**
-   * Validate that 4 points form a convex quad with plausible interior angles
+   * Validate that 4 points form a valid convex quad with plausible interior angles
    */
   static isValidConvexQuad(q: QuadPoints, boundW: number, boundH: number): boolean {
     const pts = [q.topLeft, q.topRight, q.bottomRight, q.bottomLeft];
 
-    // Check minimum side lengths
     const topW = Math.hypot(q.topRight.x - q.topLeft.x, q.topRight.y - q.topLeft.y);
     const botW = Math.hypot(q.bottomRight.x - q.bottomLeft.x, q.bottomRight.y - q.bottomLeft.y);
     const leftH = Math.hypot(q.bottomLeft.x - q.topLeft.x, q.bottomLeft.y - q.topLeft.y);
     const rightH = Math.hypot(q.bottomRight.x - q.topRight.x, q.bottomRight.y - q.topRight.y);
 
-    const minSide = Math.min(boundW, boundH) * 0.15;
+    const minSide = Math.min(boundW, boundH) * 0.12;
     if (topW < minSide || botW < minSide || leftH < minSide || rightH < minSide) {
       return false;
     }
 
-    // Check convexity via cross product signs
+    // Ratio of opposite edges should not be absurd (must be between 0.40 and 2.5)
+    if (topW / botW < 0.4 || topW / botW > 2.5) return false;
+    if (leftH / rightH < 0.4 || leftH / rightH > 2.5) return false;
+
+    // Check convexity & orientation via cross product signs
     let sign = 0;
     for (let i = 0; i < 4; i++) {
       const p1 = pts[i];
@@ -628,7 +746,6 @@ export class CVEngine {
     let boxH: number;
 
     if (targetAspect === "card") {
-      // Standard ID card ratio is ~1.586 (85.6mm x 53.98mm)
       boxW = width * 0.82;
       boxH = boxW / 1.586;
       if (boxH > height * 0.75) {
@@ -636,7 +753,6 @@ export class CVEngine {
         boxW = boxH * 1.586;
       }
     } else {
-      // A4 ratio is ~1.414 (Portrait)
       boxH = height * 0.82;
       boxW = boxH / 1.414;
       if (boxW > width * 0.88) {
@@ -649,365 +765,270 @@ export class CVEngine {
     const startY = (height - boxH) / 2;
 
     return {
-      topLeft: { x: startX, y: startY },
-      topRight: { x: startX + boxW, y: startY },
-      bottomRight: { x: startX + boxW, y: startY + boxH },
-      bottomLeft: { x: startX, y: startY + boxH },
+      topLeft: { x: Math.round(startX), y: Math.round(startY) },
+      topRight: { x: Math.round(startX + boxW), y: Math.round(startY) },
+      bottomRight: { x: Math.round(startX + boxW), y: Math.round(startY + boxH) },
+      bottomLeft: { x: Math.round(startX), y: Math.round(startY + boxH) },
     };
   }
 
   /**
-   * Evaluate camera quality metrics (sharpness, luminance, stability)
-   */
-  static evaluateFrameQuality(
-    video: HTMLVideoElement,
-    quad: QuadPoints | null
-  ): {
-    sharpness: number;
-    brightness: number;
-    isStable: boolean;
-    guidance: string;
-    canAutoCapture: boolean;
-  } {
-    if (!video.videoWidth || !video.videoHeight) {
-      return {
-        sharpness: 0,
-        brightness: 0,
-        isStable: false,
-        guidance: "Đang mở camera...",
-        canAutoCapture: false,
-      };
-    }
-
-    const w = 160;
-    const h = 120;
-    const canvas = document.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) {
-      return {
-        sharpness: 50,
-        brightness: 120,
-        isStable: true,
-        guidance: "Đưa tài liệu vào khung",
-        canAutoCapture: true,
-      };
-    }
-
-    ctx.drawImage(video, 0, 0, w, h);
-    const imgData = ctx.getImageData(0, 0, w, h);
-    const d = imgData.data;
-
-    let totalLuma = 0;
-    const gray = new Float32Array(w * h);
-
-    for (let i = 0; i < d.length; i += 4) {
-      const luma = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-      gray[i / 4] = luma;
-      totalLuma += luma;
-    }
-
-    const avgBrightness = totalLuma / (w * h);
-
-    // Laplacian variance for sharpness / blur detection
-    let laplacianSum = 0;
-    let laplacianSqSum = 0;
-    let count = 0;
-
-    for (let y = 1; y < h - 1; y += 2) {
-      for (let x = 1; x < w - 1; x += 2) {
-        const idx = y * w + x;
-        const lap =
-          gray[idx - 1] +
-          gray[idx + 1] +
-          gray[idx - w] +
-          gray[idx + w] -
-          4 * gray[idx];
-        laplacianSum += lap;
-        laplacianSqSum += lap * lap;
-        count++;
-      }
-    }
-
-    const variance = (laplacianSqSum - (laplacianSum * laplacianSum) / count) / count;
-    const sharpnessScore = Math.min(100, Math.round(variance * 1.5));
-
-    let guidance = "Đưa tài liệu vào khung";
-    let canAutoCapture = false;
-
-    if (avgBrightness < 45) {
-      guidance = "Khu vực quá tối, hãy bật đèn hoặc di chuyển ra sáng";
-    } else if (avgBrightness > 230) {
-      guidance = "Ánh sáng quá chói, hãy giảm bớt phản chiếu";
-    } else if (sharpnessScore < 20) {
-      guidance = "Giữ điện thoại ổn định để lấy nét";
-    } else if (quad) {
-      guidance = "Đã nhận diện tài liệu - Giữ yên để chụp";
-      canAutoCapture = sharpnessScore > 25 && avgBrightness >= 50 && avgBrightness <= 225;
-    }
-
-    return {
-      sharpness: sharpnessScore,
-      brightness: Math.round(avgBrightness),
-      isStable: sharpnessScore > 25,
-      guidance,
-      canAutoCapture,
-    };
-  }
-
-  /**
-   * 4-Point Perspective Transform (Bilinear / Homography Warp)
-   * Warps any trapezoid/skewed quad into a perfectly flat rectangular canvas
+   * High quality Perspective Warp Transformation Matrix calculation & rendering
    */
   static warpPerspective(
-    sourceImg: HTMLImageElement | HTMLCanvasElement,
+    source: HTMLCanvasElement | HTMLImageElement | HTMLVideoElement,
     quad: QuadPoints,
-    desiredWidth?: number,
-    desiredHeight?: number
+    outputWidth?: number,
+    outputHeight?: number
   ): HTMLCanvasElement {
-    // Calculate geometric width & height from 4 points
-    const topW = Math.hypot(quad.topRight.x - quad.topLeft.x, quad.topRight.y - quad.topLeft.y);
-    const botW = Math.hypot(quad.bottomRight.x - quad.bottomLeft.x, quad.bottomRight.y - quad.bottomLeft.y);
-    const leftH = Math.hypot(quad.bottomLeft.x - quad.topLeft.x, quad.bottomLeft.y - quad.topLeft.y);
-    const rightH = Math.hypot(quad.bottomRight.x - quad.topRight.x, quad.bottomRight.y - quad.topRight.y);
+    const srcTopW = Math.hypot(quad.topRight.x - quad.topLeft.x, quad.topRight.y - quad.topLeft.y);
+    const srcBotW = Math.hypot(quad.bottomRight.x - quad.bottomLeft.x, quad.bottomRight.y - quad.bottomLeft.y);
+    const srcLeftH = Math.hypot(quad.bottomLeft.x - quad.topLeft.x, quad.bottomLeft.y - quad.topLeft.y);
+    const srcRightH = Math.hypot(quad.bottomRight.x - quad.topRight.x, quad.bottomRight.y - quad.topRight.y);
 
-    const outW = Math.round(desiredWidth || Math.max(topW, botW));
-    const outH = Math.round(desiredHeight || Math.max(leftH, rightH));
+    const targetW = outputWidth || Math.max(800, Math.round(Math.max(srcTopW, srcBotW)));
+    const targetH = outputHeight || Math.max(1100, Math.round(Math.max(srcLeftH, srcRightH)));
 
     const outCanvas = document.createElement("canvas");
-    outCanvas.width = outW;
-    outCanvas.height = outH;
+    outCanvas.width = targetW;
+    outCanvas.height = targetH;
     const outCtx = outCanvas.getContext("2d", { willReadFrequently: true });
 
     if (!outCtx) return outCanvas;
 
-    // Draw source onto temporary canvas to read pixels
+    // Direct Homography projective warp with bilinear sampling
     const srcCanvas = document.createElement("canvas");
-    const sw = "naturalWidth" in sourceImg ? sourceImg.naturalWidth || sourceImg.width : sourceImg.width;
-    const sh = "naturalHeight" in sourceImg ? sourceImg.naturalHeight || sourceImg.height : sourceImg.height;
+    const sw = (source as any).videoWidth || (source as any).naturalWidth || (source as any).width || 1280;
+    const sh = (source as any).videoHeight || (source as any).naturalHeight || (source as any).height || 720;
     srcCanvas.width = sw;
     srcCanvas.height = sh;
     const srcCtx = srcCanvas.getContext("2d", { willReadFrequently: true });
     if (!srcCtx) return outCanvas;
 
-    srcCtx.drawImage(sourceImg as any, 0, 0, sw, sh);
-    const srcData = srcCtx.getImageData(0, 0, sw, sh);
+    srcCtx.drawImage(source as any, 0, 0, sw, sh);
+    const srcImageData = srcCtx.getImageData(0, 0, sw, sh);
+    const srcPixels = srcImageData.data;
 
-    const destData = outCtx.createImageData(outW, outH);
-    const sD = srcData.data;
-    const dD = destData.data;
+    const outImageData = outCtx.createImageData(targetW, targetH);
+    const outPixels = outImageData.data;
 
-    const { topLeft: p0, topRight: p1, bottomRight: p2, bottomLeft: p3 } = quad;
+    // Compute inverse perspective transform matrix
+    const H = this.getPerspectiveTransformMatrix(
+      [
+        { x: 0, y: 0 },
+        { x: targetW, y: 0 },
+        { x: targetW, y: targetH },
+        { x: 0, y: targetH },
+      ],
+      [quad.topLeft, quad.topRight, quad.bottomRight, quad.bottomLeft]
+    );
 
-    // Forward/Bilinear mapping for smooth warp
-    for (let dy = 0; dy < outH; dy++) {
-      const v = dy / (outH - 1 || 1);
-      const topX = p0.x + (p1.x - p0.x) * (0);
-      const botX = p3.x + (p2.x - p3.x) * (0);
-      
-      for (let dx = 0; dx < outW; dx++) {
-        const u = dx / (outW - 1 || 1);
+    // Warp pixels via bilinear interpolation
+    for (let y = 0; y < targetH; y++) {
+      const rowOffset = y * targetW * 4;
+      for (let x = 0; x < targetW; x++) {
+        const denom = H[6] * x + H[7] * y + H[8];
+        if (denom === 0) continue;
 
-        // Bilinear interpolation of quad points
-        const sx = (1 - u) * (1 - v) * p0.x + u * (1 - v) * p1.x + u * v * p2.x + (1 - u) * v * p3.x;
-        const sy = (1 - u) * (1 - v) * p0.y + u * (1 - v) * p1.y + u * v * p2.y + (1 - u) * v * p3.y;
+        const srcX = (H[0] * x + H[1] * y + H[2]) / denom;
+        const srcY = (H[3] * x + H[4] * y + H[5]) / denom;
 
-        const isx = Math.round(sx);
-        const isy = Math.round(sy);
+        if (srcX >= 0 && srcX < sw - 1 && srcY >= 0 && srcY < sh - 1) {
+          const x0 = Math.floor(srcX);
+          const y0 = Math.floor(srcY);
+          const x1 = x0 + 1;
+          const y1 = y0 + 1;
 
-        if (isx >= 0 && isx < sw && isy >= 0 && isy < sh) {
-          const sIdx = (isy * sw + isx) * 4;
-          const dIdx = (dy * outW + dx) * 4;
+          const dx = srcX - x0;
+          const dy = srcY - y0;
 
-          dD[dIdx] = sD[sIdx];
-          dD[dIdx + 1] = sD[sIdx + 1];
-          dD[dIdx + 2] = sD[sIdx + 2];
-          dD[dIdx + 3] = 255;
+          const idx00 = (y0 * sw + x0) * 4;
+          const idx10 = (y0 * sw + x1) * 4;
+          const idx01 = (y1 * sw + x0) * 4;
+          const idx11 = (y1 * sw + x1) * 4;
+
+          const outIdx = rowOffset + x * 4;
+
+          for (let c = 0; c < 3; c++) {
+            const v0 = srcPixels[idx00 + c] * (1 - dx) + srcPixels[idx10 + c] * dx;
+            const v1 = srcPixels[idx01 + c] * (1 - dx) + srcPixels[idx11 + c] * dx;
+            outPixels[outIdx + c] = Math.round(v0 * (1 - dy) + v1 * dy);
+          }
+          outPixels[outIdx + 3] = 255;
         }
       }
     }
 
-    outCtx.putImageData(destData, 0, 0);
+    outCtx.putImageData(outImageData, 0, 0);
     return outCanvas;
   }
 
   /**
-   * Apply color enhancement filters: original, auto, document, bw, grayscale, magic, photo
+   * 3x3 Projective Homography Matrix solver
+   */
+  private static getPerspectiveTransformMatrix(srcPts: Point[], dstPts: Point[]): number[] {
+    const A: number[][] = [];
+    const B: number[] = [];
+
+    for (let i = 0; i < 4; i++) {
+      const sx = srcPts[i].x;
+      const sy = srcPts[i].y;
+      const dx = dstPts[i].x;
+      const dy = dstPts[i].y;
+
+      A.push([sx, sy, 1, 0, 0, 0, -sx * dx, -sy * dx]);
+      B.push(dx);
+
+      A.push([0, 0, 0, sx, sy, 1, -sx * dy, -sy * dy]);
+      B.push(dy);
+    }
+
+    // Solve 8x8 linear system via Gaussian elimination
+    const h = this.solveLinearSystem(A, B);
+    return [h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 1.0];
+  }
+
+  private static solveLinearSystem(A: number[][], B: number[]): number[] {
+    const n = B.length;
+    for (let i = 0; i < n; i++) {
+      let maxEl = Math.abs(A[i][i]);
+      let maxRow = i;
+      for (let k = i + 1; k < n; k++) {
+        if (Math.abs(A[k][i]) > maxEl) {
+          maxEl = Math.abs(A[k][i]);
+          maxRow = k;
+        }
+      }
+
+      for (let k = i; k < n; k++) {
+        const tmp = A[maxRow][k];
+        A[maxRow][k] = A[i][k];
+        A[i][k] = tmp;
+      }
+      const tmpB = B[maxRow];
+      B[maxRow] = B[i];
+      B[i] = tmpB;
+
+      for (let k = i + 1; k < n; k++) {
+        const c = -A[k][i] / A[i][i];
+        for (let j = i; j < n; j++) {
+          if (i === j) {
+            A[k][j] = 0;
+          } else {
+            A[k][j] += c * A[i][j];
+          }
+        }
+        B[k] += c * B[i];
+      }
+    }
+
+    const x = new Array(n).fill(0);
+    for (let i = n - 1; i >= 0; i--) {
+      let sum = B[i];
+      for (let j = i + 1; j < n; j++) {
+        sum -= A[i][j] * x[j];
+      }
+      x[i] = sum / A[i][i];
+    }
+    return x;
+  }
+
+  /**
+   * Apply clean, professional document filters (Document Clean, Magic Color, B&W, Grayscale, etc.)
    */
   static applyFilter(
     sourceCanvas: HTMLCanvasElement,
     filter: FilterMode,
-    rotation: number = 0
+    rotationDeg: number = 0
   ): HTMLCanvasElement {
-    let workingCanvas = sourceCanvas;
+    const rotW = rotationDeg === 90 || rotationDeg === 270 ? sourceCanvas.height : sourceCanvas.width;
+    const rotH = rotationDeg === 90 || rotationDeg === 270 ? sourceCanvas.width : sourceCanvas.height;
 
-    // 1. Handle rotation (90, 180, 270)
-    if (rotation !== 0) {
-      const rotCanvas = document.createElement("canvas");
-      const is90or270 = rotation === 90 || rotation === 270;
-      rotCanvas.width = is90or270 ? workingCanvas.height : workingCanvas.width;
-      rotCanvas.height = is90or270 ? workingCanvas.width : workingCanvas.height;
-      const rotCtx = rotCanvas.getContext("2d");
-      if (rotCtx) {
-        rotCtx.translate(rotCanvas.width / 2, rotCanvas.height / 2);
-        rotCtx.rotate((rotation * Math.PI) / 180);
-        rotCtx.drawImage(workingCanvas, -workingCanvas.width / 2, -workingCanvas.height / 2);
-        workingCanvas = rotCanvas;
+    const canvas = document.createElement("canvas");
+    canvas.width = rotW;
+    canvas.height = rotH;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return canvas;
+
+    ctx.save();
+    ctx.translate(rotW / 2, rotH / 2);
+    ctx.rotate((rotationDeg * Math.PI) / 180);
+    ctx.drawImage(sourceCanvas, -sourceCanvas.width / 2, -sourceCanvas.height / 2);
+    ctx.restore();
+
+    if (filter === "original") return canvas;
+
+    const imgData = ctx.getImageData(0, 0, rotW, rotH);
+    const data = imgData.data;
+    const len = data.length;
+
+    if (filter === "grayscale") {
+      for (let i = 0; i < len; i += 4) {
+        const luma = Math.round(data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114);
+        data[i] = luma;
+        data[i + 1] = luma;
+        data[i + 2] = luma;
       }
-    }
-
-    if (filter === "original") {
-      return workingCanvas;
-    }
-
-    const w = workingCanvas.width;
-    const h = workingCanvas.height;
-    const outCanvas = document.createElement("canvas");
-    outCanvas.width = w;
-    outCanvas.height = h;
-    const ctx = outCanvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) return workingCanvas;
-
-    ctx.drawImage(workingCanvas, 0, 0);
-    const imgData = ctx.getImageData(0, 0, w, h);
-    const d = imgData.data;
-
-    // Filter implementations
-    switch (filter) {
-      case "grayscale": {
-        for (let i = 0; i < d.length; i += 4) {
-          const luma = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-          d[i] = luma;
-          d[i + 1] = luma;
-          d[i + 2] = luma;
-        }
-        break;
+    } else if (filter === "bw") {
+      let sum = 0;
+      for (let i = 0; i < len; i += 4) {
+        sum += (data[i] * 77 + data[i + 1] * 150 + data[i + 2] * 29) >> 8;
       }
+      const avg = sum / (rotW * rotH);
+      const thresh = avg * 0.92;
 
-      case "bw": {
-        // High contrast Black & White thresholding with Otsu / local average
-        // Calculate average background luminance
-        let sum = 0;
-        for (let i = 0; i < d.length; i += 4) {
-          sum += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-        }
-        const avg = sum / (d.length / 4);
-        const threshold = Math.max(90, Math.min(160, avg * 0.88));
-
-        for (let i = 0; i < d.length; i += 4) {
-          const luma = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-          const val = luma > threshold ? 255 : 0;
-          d[i] = val;
-          d[i + 1] = val;
-          d[i + 2] = val;
-        }
-        break;
+      for (let i = 0; i < len; i += 4) {
+        const luma = (data[i] * 77 + data[i + 1] * 150 + data[i + 2] * 29) >> 8;
+        const v = luma > thresh ? 255 : 0;
+        data[i] = v;
+        data[i + 1] = v;
+        data[i + 2] = v;
       }
+    } else if (filter === "document" || filter === "magic" || filter === "auto") {
+      // Document enhancement: white background whitening + contrast boost + dark text sharpening
+      for (let i = 0; i < len; i += 4) {
+        let r = data[i];
+        let g = data[i + 1];
+        let b = data[i + 2];
 
-      case "document": {
-        // Document Scan Mode: Paper whitening + contrast curve + sharpen
-        // Makes background clean white while preserving ink / stamps / signatures
-        for (let i = 0; i < d.length; i += 4) {
-          let r = d[i];
-          let g = d[i + 1];
-          let b = d[i + 2];
+        // S-curve contrast
+        r = Math.min(255, Math.max(0, (r - 128) * 1.35 + 128 + 15));
+        g = Math.min(255, Math.max(0, (g - 128) * 1.35 + 128 + 15));
+        b = Math.min(255, Math.max(0, (b - 128) * 1.35 + 128 + 15));
 
-          // Normalize background (whiten off-white paper)
-          const luma = 0.299 * r + 0.587 * g + 0.114 * b;
-          if (luma > 155) {
-            // Paper highlight stretch
-            const factor = Math.min(1.4, 1 + (luma - 155) / 100);
-            r = Math.min(255, r * factor);
-            g = Math.min(255, g * factor);
-            b = Math.min(255, b * factor);
-          } else {
-            // Darken ink / text
-            r = Math.max(0, r * 0.85);
-            g = Math.max(0, g * 0.85);
-            b = Math.max(0, b * 0.85);
-          }
-
-          d[i] = r;
-          d[i + 1] = g;
-          d[i + 2] = b;
+        // Whitening background
+        const luma = (r * 77 + g * 150 + b * 29) >> 8;
+        if (luma > 175) {
+          const boost = (luma - 175) * 0.95;
+          r = Math.min(255, r + boost);
+          g = Math.min(255, g + boost);
+          b = Math.min(255, b + boost);
         }
-        break;
+
+        data[i] = r;
+        data[i + 1] = g;
+        data[i + 2] = b;
       }
-
-      case "magic": {
-        // Magic Color: Shadow removal + vivid saturation + high text contrast
-        for (let i = 0; i < d.length; i += 4) {
-          let r = d[i];
-          let g = d[i + 1];
-          let b = d[i + 2];
-
-          // Shadow lift: lift darker grays while keeping black ink dark
-          const luma = 0.299 * r + 0.587 * g + 0.114 * b;
-          if (luma > 130) {
-            r = Math.min(255, r * 1.28 + 15);
-            g = Math.min(255, g * 1.28 + 15);
-            b = Math.min(255, b * 1.28 + 15);
-          } else {
-            r = Math.max(0, r * 0.8);
-            g = Math.max(0, g * 0.8);
-            b = Math.max(0, b * 0.8);
-          }
-
-          d[i] = r;
-          d[i + 1] = g;
-          d[i + 2] = b;
-        }
-        break;
-      }
-
-      case "auto": {
-        // Auto Level & Contrast stretch
-        let minLuma = 255;
-        let maxLuma = 0;
-        for (let i = 0; i < d.length; i += 16) {
-          const luma = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-          if (luma < minLuma) minLuma = luma;
-          if (luma > maxLuma) maxLuma = luma;
-        }
-        const range = Math.max(1, maxLuma - minLuma);
-
-        for (let i = 0; i < d.length; i += 4) {
-          d[i] = Math.min(255, Math.max(0, ((d[i] - minLuma) / range) * 255));
-          d[i + 1] = Math.min(255, Math.max(0, ((d[i + 1] - minLuma) / range) * 255));
-          d[i + 2] = Math.min(255, Math.max(0, ((d[i + 2] - minLuma) / range) * 255));
-        }
-        break;
-      }
-
-      case "photo": {
-        // Photo: slight contrast boost + saturation
-        for (let i = 0; i < d.length; i += 4) {
-          d[i] = Math.min(255, d[i] * 1.05);
-          d[i + 1] = Math.min(255, d[i + 1] * 1.05);
-          d[i + 2] = Math.min(255, d[i + 2] * 1.05);
-        }
-        break;
+    } else if (filter === "photo") {
+      // Color photo enhancement
+      for (let i = 0; i < len; i += 4) {
+        data[i] = Math.min(255, Math.max(0, (data[i] - 128) * 1.15 + 128 + 5));
+        data[i + 1] = Math.min(255, Math.max(0, (data[i + 1] - 128) * 1.15 + 128 + 5));
+        data[i + 2] = Math.min(255, Math.max(0, (data[i + 2] - 128) * 1.15 + 128 + 5));
       }
     }
 
     ctx.putImageData(imgData, 0, 0);
-    return outCanvas;
+    return canvas;
   }
 
   /**
-   * Convert image to base64 Data URL helper
-   */
-  static canvasToDataURL(canvas: HTMLCanvasElement, quality: number = 0.92): string {
-    return canvas.toDataURL("image/jpeg", quality);
-  }
-
-  /**
-   * Load base64 Data URL to HTMLImageElement
+   * Helper to load HTMLImageElement from data URL or image URL
    */
   static loadImage(src: string): Promise<HTMLImageElement> {
     return new Promise((resolve, reject) => {
       const img = new Image();
+      img.crossOrigin = "anonymous";
       img.onload = () => resolve(img);
       img.onerror = (e) => reject(e);
       img.src = src;
@@ -1015,55 +1036,52 @@ export class CVEngine {
   }
 
   /**
-   * Stitch multiple scanned pages into a single vertical long image
+   * Stitch multiple scanned pages vertically into a single continuous long image (ảnh dài)
    */
   static async stitchVerticalLongImage(
     pages: { processedImage: string }[],
-    separatorHeight: number = 24
+    spacingPx: number = 20
   ): Promise<string> {
-    if (pages.length === 0) return "";
-    if (pages.length === 1) return pages[0].processedImage;
+    if (!pages || pages.length === 0) return "";
 
-    const images = await Promise.all(pages.map((p) => this.loadImage(p.processedImage)));
-    
-    // Target uniform width (max of all images, up to 1600px for sharp mobile viewing)
-    const maxWidth = Math.min(1600, Math.max(...images.map((img) => img.naturalWidth || 1200)));
-
-    let totalHeight = (pages.length - 1) * separatorHeight;
-    const scaledHeights: number[] = [];
-
-    for (const img of images) {
-      const scale = maxWidth / img.naturalWidth;
-      const sh = Math.round(img.naturalHeight * scale);
-      scaledHeights.push(sh);
-      totalHeight += sh;
+    const loadedImages: HTMLImageElement[] = [];
+    for (const p of pages) {
+      const img = await this.loadImage(p.processedImage);
+      loadedImages.push(img);
     }
 
+    // Determine max width
+    const targetWidth = Math.max(...loadedImages.map((img) => img.naturalWidth || 1200));
+    let totalHeight = 0;
+
+    const scaledHeights: number[] = [];
+    for (const img of loadedImages) {
+      const scale = targetWidth / (img.naturalWidth || 1);
+      const h = Math.round((img.naturalHeight || 1) * scale);
+      scaledHeights.push(h);
+      totalHeight += h;
+    }
+
+    totalHeight += spacingPx * (loadedImages.length - 1);
+
     const canvas = document.createElement("canvas");
-    canvas.width = maxWidth;
+    canvas.width = targetWidth;
     canvas.height = totalHeight;
     const ctx = canvas.getContext("2d");
-    if (!ctx) return pages[0].processedImage;
+    if (!ctx) return "";
 
-    // Fill background with clean off-white
-    ctx.fillStyle = "#f1f5f9";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // White background
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, targetWidth, totalHeight);
 
     let currentY = 0;
-    images.forEach((img, idx) => {
-      const h = scaledHeights[idx];
-      ctx.drawImage(img, 0, currentY, maxWidth, h);
+    for (let i = 0; i < loadedImages.length; i++) {
+      const img = loadedImages[i];
+      const h = scaledHeights[i];
+      ctx.drawImage(img, 0, currentY, targetWidth, h);
+      currentY += h + spacingPx;
+    }
 
-      currentY += h;
-
-      // Draw separator line if not last
-      if (idx < images.length - 1) {
-        ctx.fillStyle = "#cbd5e1";
-        ctx.fillRect(0, currentY + separatorHeight / 2 - 1, maxWidth, 2);
-        currentY += separatorHeight;
-      }
-    });
-
-    return canvas.toDataURL("image/jpeg", 0.9);
+    return canvas.toDataURL("image/jpeg", 0.92);
   }
 }

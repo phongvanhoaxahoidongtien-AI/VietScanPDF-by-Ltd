@@ -12,12 +12,12 @@ export interface TrackerConfig {
 
 export const DEFAULT_TRACKER_CONFIG: TrackerConfig = {
   historySize: 10,
-  minConfidenceHigh: 0.65,
-  minConfidenceLow: 0.36,
-  minStabilityScoreForCapture: 82,
-  minConfidenceForCapture: 0.70,
-  requiredStableFrames: 9,
-  maxCornerDriftRatio: 0.028, // 2.8% of frame width (tight tolerance for stillness)
+  minConfidenceHigh: 0.60,
+  minConfidenceLow: 0.35,
+  minStabilityScoreForCapture: 80,
+  minConfidenceForCapture: 0.65,
+  requiredStableFrames: 8,
+  maxCornerDriftRatio: 0.026, // 2.6% of frame width (stable stillness)
 };
 
 /**
@@ -65,18 +65,26 @@ export class DocumentTracker {
   }
 
   /**
-   * Set explicit capture cooldown to prevent duplicate captures
+   * Set explicit capture cooldown / lock to prevent duplicate captures
    */
-  setCooldown(durationMs: number = 2000): void {
+  setCooldown(durationMs: number = 3000): void {
     this.isCooldownActive = true;
     this.cooldownExpiry = Date.now() + durationMs;
     this.stableFrames = 0;
   }
 
   /**
-   * Normalize 4 corners into deterministic order [TL, TR, BR, BL]
-   * Uses centroid polar angle coordinates and distance to origin to prevent
-   * any corner flipping or index swapping across frames.
+   * Unlock tracker immediately
+   */
+  unlock(): void {
+    this.isCooldownActive = false;
+    this.cooldownExpiry = 0;
+  }
+
+  /**
+   * Normalize 4 corners into strictly deterministic order:
+   * P0 = TopLeft, P1 = TopRight, P2 = BottomRight, P3 = BottomLeft.
+   * Uses centroid polar clockwise angle sorting and top-left distance scoring.
    */
   static normalize4Corners(points: Point[]): QuadPoints {
     if (points.length !== 4) {
@@ -94,15 +102,15 @@ export class DocumentTracker {
       return angleA - angleB;
     });
 
-    // 3. Find the Top-Left corner: the point with smallest (x + y * 1.2)
+    // 3. Find the Top-Left corner: the point in the top quadrant with minimal (x + y * 1.25)
     let bestTlIdx = 0;
-    let minSum = Infinity;
+    let minScore = Infinity;
 
     for (let i = 0; i < 4; i++) {
       const p = clockwise[i];
       const score = p.x * 1.0 + p.y * 1.25;
-      if (score < minSum) {
-        minSum = score;
+      if (score < minScore) {
+        minScore = score;
         bestTlIdx = i;
       }
     }
@@ -121,27 +129,18 @@ export class DocumentTracker {
     };
   }
 
-  /**
-   * Distance between two 2D points
-   */
-  private static dist(a: Point, b: Point): number {
+  static dist(a: Point, b: Point): number {
     return Math.hypot(a.x - b.x, a.y - b.y);
   }
 
-  /**
-   * Linear interpolation between two points
-   */
-  private static lerpPoint(a: Point, b: Point, t: number): Point {
+  static lerpPoint(a: Point, b: Point, t: number): Point {
     return {
       x: a.x + (b.x - a.x) * t,
       y: a.y + (b.y - a.y) * t,
     };
   }
 
-  /**
-   * Calculate polygon area of quad
-   */
-  private static calcQuadArea(q: QuadPoints): number {
+  static calcQuadArea(q: QuadPoints): number {
     const pts = [q.topLeft, q.topRight, q.bottomRight, q.bottomLeft];
     let area = 0;
     for (let i = 0; i < 4; i++) {
@@ -165,7 +164,7 @@ export class DocumentTracker {
     const fh = frameHeight || 720;
     const driftThreshold = fw * this.config.maxCornerDriftRatio;
 
-    // Check if under capture cooldown
+    // Check if under capture cooldown / lock
     if (this.isCooldownActive) {
       if (Date.now() >= this.cooldownExpiry) {
         this.isCooldownActive = false;
@@ -178,7 +177,7 @@ export class DocumentTracker {
           stabilityScore: 0,
           stableFrames: 0,
           isReadyForCapture: false,
-          guidance: "Đang xử lý tài liệu vừa chụp...",
+          guidance: "Đang lưu trang vừa chụp...",
         };
       }
     }
@@ -226,8 +225,8 @@ export class DocumentTracker {
         const d3 = DocumentTracker.dist(currentNormQuad.bottomLeft, this.smoothedQuad.bottomLeft);
         const maxJump = Math.max(d0, d1, d2, d3);
 
-        // If sudden jump > 20% of screen width and confidence is modest, reject as transient noise
-        if (maxJump > fw * 0.20 && confidence < 0.88) {
+        // If sudden jump > 22% of screen width and confidence is moderate, reject as transient noise/hand pass
+        if (maxJump > fw * 0.22 && confidence < 0.90) {
           isOutlier = true;
         }
       }
@@ -247,16 +246,16 @@ export class DocumentTracker {
           const avgDrift = (d0 + d1 + d2 + d3) / 4;
           const driftRatio = avgDrift / fw;
 
-          let alpha = 0.22;
+          let alpha = 0.25;
 
-          // Dead-band zone: If movement is tiny (< 1.5% of width or < 18px), apply ultra-heavy damping
-          // so the polygon remains 100% frozen / rock-solid!
-          if (maxCornerDrift < fw * 0.015) {
-            alpha = 0.04; // Micro-damping (anchors polygon completely)
+          // Dead-band zone: If movement is tiny (< 1.6% of width), apply heavy damping
+          // so the polygon remains 100% stable without micro-jittering!
+          if (maxCornerDrift < fw * 0.016) {
+            alpha = 0.03; // Micro-damping (anchors polygon)
           } else if (driftRatio > 0.045) {
-            alpha = 0.46; // Fluid tracking during intentional hand motion
+            alpha = 0.50; // Follow user's repositioning fluidly
           } else if (driftRatio > 0.02) {
-            alpha = 0.28;
+            alpha = 0.30;
           }
 
           this.smoothedQuad = {
@@ -306,7 +305,7 @@ export class DocumentTracker {
 
       // Stability formula
       const driftScore = Math.max(0, 100 - (maxHistoryDrift / driftThreshold) * 80);
-      const areaScore = Math.max(0, 100 - areaDeltaPct * 260);
+      const areaScore = Math.max(0, 100 - areaDeltaPct * 250);
 
       stabilityScore = Math.round(driftScore * 0.7 + areaScore * 0.3);
       stabilityScore = Math.max(0, Math.min(100, stabilityScore));
@@ -332,7 +331,7 @@ export class DocumentTracker {
     // 5. User-friendly guidance message
     let guidance = "Đưa tài liệu vào khung hình";
     if (isReadyForCapture) {
-      guidance = "Đã nhận diện chuẩn - Giữ yên để chụp...";
+      guidance = "Đã nhận diện chuẩn - Đang tự động chụp...";
     } else if (this.isDetectedState) {
       if (stabilityScore < 65) {
         guidance = "Giữ điện thoại ổn định để lấy nét...";
@@ -356,4 +355,3 @@ export class DocumentTracker {
     };
   }
 }
-
