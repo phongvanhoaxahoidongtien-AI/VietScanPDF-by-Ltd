@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
   Highlighter,
   Upload,
@@ -11,39 +11,96 @@ import {
   Trash2,
   ChevronLeft,
   ChevronRight,
+  ZoomIn,
+  ZoomOut,
+  Maximize,
+  RotateCw,
+  Crop,
+  Undo,
+  Redo,
   Sparkles,
+  RefreshCw,
+  Edit3,
+  Square,
+  Eraser,
+  Move,
 } from "lucide-react";
-import { PDFDocument } from "pdf-lib";
-import { PDFToolsEngine, HighlightRect } from "../utils/pdfToolsEngine";
+import { PDFToolsEngine, PDFPageItem, HighlightStroke } from "../utils/pdfToolsEngine";
 import { PDFGenerator } from "../utils/pdfGenerator";
 import { generateDocumentFileName } from "../utils/naming";
+import { PDFPageCropModal } from "./PDFPageCropModal";
 
 interface PDFHighlightModalProps {
   onClose: () => void;
 }
 
+const HIGHLIGHT_COLORS = [
+  { name: "Vàng dạ quang", hex: "#ffe600", bg: "bg-yellow-400", border: "border-yellow-300" },
+  { name: "Xanh lá dạ quang", hex: "#00e676", bg: "bg-emerald-400", border: "border-emerald-300" },
+  { name: "Hồng dạ quang", hex: "#ff4081", bg: "bg-pink-500", border: "border-pink-400" },
+  { name: "Xanh ngọc dạ quang", hex: "#00e5ff", bg: "bg-cyan-400", border: "border-cyan-300" },
+  { name: "Cam dạ quang", hex: "#ff9100", bg: "bg-amber-500", border: "border-amber-400" },
+  { name: "Tím dạ quang", hex: "#d500f9", bg: "bg-purple-500", border: "border-purple-400" },
+];
+
+const BRUSH_SIZES = [
+  { label: "Mảnh (Chữ nhỏ)", sizeFactor: 0.008, px: 8 },
+  { label: "Vừa (Dòng chữ)", sizeFactor: 0.016, px: 16 },
+  { label: "Đậm (Tiêu đề)", sizeFactor: 0.028, px: 26 },
+  { label: "Cực đậm (Đoạn)", sizeFactor: 0.045, px: 42 },
+];
+
 export const PDFHighlightModal: React.FC<PDFHighlightModalProps> = ({ onClose }) => {
   const [file, setFile] = useState<File | null>(null);
-  const [arrayBuffer, setArrayBuffer] = useState<ArrayBuffer | null>(null);
-  const [totalPages, setTotalPages] = useState<number>(0);
+  const [pages, setPages] = useState<PDFPageItem[]>([]);
   const [currentPageIndex, setCurrentPageIndex] = useState<number>(0);
 
-  // Highlighting rectangles per page index: Map<pageIndex, HighlightRect[]>
-  const [highlightsMap, setHighlightsMap] = useState<Record<number, HighlightRect[]>>({});
+  // Highlighting strokes map: Record<pageId, HighlightStroke[]>
+  const [highlightsMap, setHighlightsMap] = useState<Record<string, HighlightStroke[]>>({});
+  // History for undo/redo per page: Record<pageId, HighlightStroke[][]>
+  const [historyMap, setHistoryMap] = useState<Record<string, HighlightStroke[][]>>({});
+  const [redoMap, setRedoMap] = useState<Record<string, HighlightStroke[][]>>({});
 
-  // Drawing state
+  // Tool settings
+  const [drawTool, setDrawTool] = useState<"pen" | "box" | "eraser" | "pan">("pen");
+  const [selectedColor, setSelectedColor] = useState<string>("#ffe600");
+  const [selectedSizeIndex, setSelectedSizeIndex] = useState<number>(1); // Medium default
+
+  // Zoom & Pan state
+  const [zoomLevel, setZoomLevel] = useState<number>(1.0); // 1.0 = 100%, up to 4.0 = 400%
+  const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState<boolean>(false);
+  const panStartRef = useRef<{ x: number; y: number; startPanX: number; startPanY: number }>({
+    x: 0,
+    y: 0,
+    startPanX: 0,
+    startPanY: 0,
+  });
+
+  // Active drawing state
   const [isDrawing, setIsDrawing] = useState<boolean>(false);
-  const [startPoint, setStartPoint] = useState<{ x: number; y: number } | null>(null);
-  const [currentDraftRect, setCurrentDraftRect] = useState<HighlightRect | null>(null);
+  const [currentPathPoints, setCurrentPathPoints] = useState<{ x: number; y: number }[]>([]);
+  const [boxStartPoint, setBoxStartPoint] = useState<{ x: number; y: number } | null>(null);
+  const [currentDraftBox, setCurrentDraftBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
 
+  // States for processing & modals
+  const [isExtracting, setIsExtracting] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [croppingPage, setCroppingPage] = useState<PDFPageItem | null>(null);
+
+  // Export results
   const [highlightedPdfUrl, setHighlightedPdfUrl] = useState<string | null>(null);
   const [highlightedBlob, setHighlightedBlob] = useState<Blob | null>(null);
   const [highlightedFileName, setHighlightedFileName] = useState<string>("");
 
   const pageContainerRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const currentPage = pages[currentPageIndex] || null;
+  const currentHighlights = currentPage ? highlightsMap[currentPage.id] || [] : [];
+
+  // File loading handler
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -56,23 +113,29 @@ export const PDFHighlightModal: React.FC<PDFHighlightModalProps> = ({ onClose })
 
     try {
       setErrorMsg(null);
+      setIsExtracting(true);
       const buffer = await f.arrayBuffer();
-      const pdfDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
-      const count = pdfDoc.getPageCount();
+      const extracted = await PDFToolsEngine.renderPDFToPages(buffer, f.name);
 
       setFile(f);
-      setArrayBuffer(buffer);
-      setTotalPages(count);
+      setPages(extracted);
       setCurrentPageIndex(0);
       setHighlightsMap({});
-    } catch (err) {
+      setHistoryMap({});
+      setRedoMap({});
+      setZoomLevel(1.0);
+      setPanOffset({ x: 0, y: 0 });
+    } catch (err: any) {
       console.error("Failed to read PDF:", err);
-      setErrorMsg("Không thể đọc tệp PDF. Vui lòng kiểm tra lại tệp.");
+      setErrorMsg(err.message || "Không thể đọc tệp PDF. Vui lòng kiểm tra lại tệp.");
+    } finally {
+      setIsExtracting(false);
+      if (e.target) e.target.value = "";
     }
   };
 
-  // Pointer / Touch drawing handlers for highlighting box
-  const getRelativeCoords = (e: React.PointerEvent<HTMLDivElement>) => {
+  // Convert client pointer event coordinates to normalized page coordinate (0..1)
+  const getNormalizedCoordinates = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!pageContainerRef.current) return { x: 0, y: 0 };
     const rect = pageContainerRef.current.getBoundingClientRect();
     const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
@@ -80,92 +143,269 @@ export const PDFHighlightModal: React.FC<PDFHighlightModalProps> = ({ onClose })
     return { x, y };
   };
 
+  // Push new state to history for Undo
+  const pushToHistory = (pageId: string, newHighlights: HighlightStroke[]) => {
+    setHighlightsMap((prev) => ({ ...prev, [pageId]: newHighlights }));
+    setHistoryMap((prev) => {
+      const pageHist = prev[pageId] || [];
+      return { ...prev, [pageId]: [...pageHist, currentHighlights] };
+    });
+    // Clear redo on new action
+    setRedoMap((prev) => ({ ...prev, [pageId]: [] }));
+  };
+
+  // Undo
+  const handleUndo = () => {
+    if (!currentPage) return;
+    const pageId = currentPage.id;
+    const pageHist = historyMap[pageId] || [];
+    if (pageHist.length === 0) return;
+
+    const previousState = pageHist[pageHist.length - 1];
+    setRedoMap((prev) => ({
+      ...prev,
+      [pageId]: [...(prev[pageId] || []), currentHighlights],
+    }));
+
+    setHighlightsMap((prev) => ({ ...prev, [pageId]: previousState }));
+    setHistoryMap((prev) => ({ ...prev, [pageId]: pageHist.slice(0, -1) }));
+  };
+
+  // Redo
+  const handleRedo = () => {
+    if (!currentPage) return;
+    const pageId = currentPage.id;
+    const pageRedo = redoMap[pageId] || [];
+    if (pageRedo.length === 0) return;
+
+    const nextState = pageRedo[pageRedo.length - 1];
+    setHistoryMap((prev) => ({
+      ...prev,
+      [pageId]: [...(prev[pageId] || []), currentHighlights],
+    }));
+
+    setHighlightsMap((prev) => ({ ...prev, [pageId]: nextState }));
+    setRedoMap((prev) => ({ ...prev, [pageId]: pageRedo.slice(0, -1) }));
+  };
+
+  // Clear all highlights on current page
+  const handleClearCurrentPage = () => {
+    if (!currentPage) return;
+    pushToHistory(currentPage.id, []);
+  };
+
+  // Rotate current page 90 degrees
+  const handleRotateCurrentPage = async () => {
+    if (!currentPage) return;
+    try {
+      const { dataUrl, width, height } = await PDFToolsEngine.rotateImageDataUrl(
+        currentPage.renderedImage,
+        90
+      );
+      setPages((prev) =>
+        prev.map((p, i) =>
+          i === currentPageIndex
+            ? {
+                ...p,
+                renderedImage: dataUrl,
+                rotation: (p.rotation + 90) % 360,
+                width,
+                height,
+              }
+            : p
+        )
+      );
+    } catch (err) {
+      console.error("Rotate error:", err);
+    }
+  };
+
+  // Crop completion callback
+  const handleCropComplete = (newImageSrc: string) => {
+    if (!croppingPage) return;
+    setPages((prev) =>
+      prev.map((p) =>
+        p.id === croppingPage.id
+          ? {
+              ...p,
+              renderedImage: newImageSrc,
+              isCropped: true,
+            }
+          : p
+      )
+    );
+    setCroppingPage(null);
+  };
+
+  // Pointer down (start drawing / box / erasing / panning)
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!file) return;
-    const coords = getRelativeCoords(e);
+    if (!currentPage) return;
+
+    if (drawTool === "pan" || e.button === 1 || e.altKey) {
+      // Pan mode
+      setIsPanning(true);
+      panStartRef.current = {
+        x: e.clientX,
+        y: e.clientY,
+        startPanX: panOffset.x,
+        startPanY: panOffset.y,
+      };
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      return;
+    }
+
+    const coords = getNormalizedCoordinates(e);
     setIsDrawing(true);
-    setStartPoint(coords);
-    setCurrentDraftRect({
-      x: coords.x,
-      y: coords.y,
-      width: 0,
-      height: 0,
-    });
+
+    if (drawTool === "pen") {
+      setCurrentPathPoints([coords]);
+    } else if (drawTool === "box") {
+      setBoxStartPoint(coords);
+      setCurrentDraftBox({ x: coords.x, y: coords.y, w: 0, h: 0 });
+    } else if (drawTool === "eraser") {
+      // Remove any highlight stroke close to this point
+      eraseAtPoint(coords);
+    }
+
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
   };
 
+  // Pointer move
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!isDrawing || !startPoint) return;
-    const coords = getRelativeCoords(e);
+    if (isPanning) {
+      const dx = e.clientX - panStartRef.current.x;
+      const dy = e.clientY - panStartRef.current.y;
+      setPanOffset({
+        x: panStartRef.current.startPanX + dx,
+        y: panStartRef.current.startPanY + dy,
+      });
+      return;
+    }
 
-    const minX = Math.min(startPoint.x, coords.x);
-    const minY = Math.min(startPoint.y, coords.y);
-    const width = Math.abs(coords.x - startPoint.x);
-    const height = Math.abs(coords.y - startPoint.y);
+    if (!isDrawing || !currentPage) return;
+    const coords = getNormalizedCoordinates(e);
 
-    setCurrentDraftRect({
-      x: minX,
-      y: minY,
-      width,
-      height,
-    });
+    if (drawTool === "pen") {
+      setCurrentPathPoints((prev) => [...prev, coords]);
+    } else if (drawTool === "box" && boxStartPoint) {
+      const minX = Math.min(boxStartPoint.x, coords.x);
+      const minY = Math.min(boxStartPoint.y, coords.y);
+      const w = Math.abs(coords.x - boxStartPoint.x);
+      const h = Math.abs(coords.y - boxStartPoint.y);
+      setCurrentDraftBox({ x: minX, y: minY, w, h });
+    } else if (drawTool === "eraser") {
+      eraseAtPoint(coords);
+    }
   };
 
-  const handlePointerUp = () => {
-    if (!isDrawing || !currentDraftRect) {
+  // Pointer up
+  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (isPanning) {
+      setIsPanning(false);
+      try {
+        (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch (err) {}
+      return;
+    }
+
+    if (!isDrawing || !currentPage) {
       setIsDrawing(false);
       return;
     }
 
-    // Minimum threshold for a highlight area
-    if (currentDraftRect.width > 0.02 && currentDraftRect.height > 0.01) {
-      setHighlightsMap((prev) => {
-        const existing = prev[currentPageIndex] || [];
-        return {
-          ...prev,
-          [currentPageIndex]: [...existing, currentDraftRect],
-        };
-      });
+    const currentBrush = BRUSH_SIZES[selectedSizeIndex];
+
+    if (drawTool === "pen" && currentPathPoints.length > 1) {
+      const newStroke: HighlightStroke = {
+        id: `stroke_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+        type: "path",
+        color: selectedColor,
+        opacity: 0.45,
+        points: currentPathPoints,
+        size: currentBrush.sizeFactor,
+      };
+      pushToHistory(currentPage.id, [...currentHighlights, newStroke]);
+    } else if (drawTool === "box" && currentDraftBox && currentDraftBox.w > 0.005 && currentDraftBox.h > 0.003) {
+      const newBoxStroke: HighlightStroke = {
+        id: `box_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+        type: "box",
+        color: selectedColor,
+        opacity: 0.45,
+        x: currentDraftBox.x,
+        y: currentDraftBox.y,
+        w: currentDraftBox.w,
+        h: currentDraftBox.h,
+      };
+      pushToHistory(currentPage.id, [...currentHighlights, newBoxStroke]);
     }
 
     setIsDrawing(false);
-    setStartPoint(null);
-    setCurrentDraftRect(null);
+    setCurrentPathPoints([]);
+    setBoxStartPoint(null);
+    setCurrentDraftBox(null);
+
+    try {
+      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch (err) {}
   };
 
-  const handleClearCurrentPageHighlights = () => {
-    setHighlightsMap((prev) => {
-      const copy = { ...prev };
-      delete copy[currentPageIndex];
-      return copy;
+  // Erase stroke helper
+  const eraseAtPoint = (pt: { x: number; y: number }) => {
+    if (!currentPage) return;
+    const threshold = 0.035;
+
+    const remaining = currentHighlights.filter((hl) => {
+      if (hl.type === "box" && hl.x !== undefined && hl.y !== undefined && hl.w !== undefined && hl.h !== undefined) {
+        return !(
+          pt.x >= hl.x - 0.01 &&
+          pt.x <= hl.x + hl.w + 0.01 &&
+          pt.y >= hl.y - 0.01 &&
+          pt.y <= hl.y + hl.h + 0.01
+        );
+      } else if (hl.type === "path" && hl.points) {
+        return !hl.points.some((p) => Math.hypot(p.x - pt.x, p.y - pt.y) < threshold);
+      }
+      return true;
     });
+
+    if (remaining.length !== currentHighlights.length) {
+      setHighlightsMap((prev) => ({ ...prev, [currentPage.id]: remaining }));
+    }
   };
 
-  const handleApplyHighlight = async () => {
-    if (!arrayBuffer) return;
-
-    const allHighlightArrays = Object.values(highlightsMap) as HighlightRect[][];
-    const hasAny = allHighlightArrays.some((arr) => arr.length > 0);
-    if (!hasAny) {
-      setErrorMsg("Vui lòng kéo chuột/tay bôi vàng ít nhất 1 vùng văn bản trên trang.");
-      return;
+  // Zoom controls
+  const handleZoom = (direction: "in" | "out" | "reset") => {
+    if (direction === "reset") {
+      setZoomLevel(1.0);
+      setPanOffset({ x: 0, y: 0 });
+    } else if (direction === "in") {
+      setZoomLevel((prev) => Math.min(4.0, +(prev + 0.35).toFixed(2)));
+    } else {
+      setZoomLevel((prev) => Math.max(0.75, +(prev - 0.35).toFixed(2)));
     }
+  };
+
+  // Export Highlighted PDF
+  const handleExportPDF = async () => {
+    if (pages.length === 0) return;
 
     setIsProcessing(true);
     setErrorMsg(null);
 
     try {
-      let currentBuffer: ArrayBuffer = arrayBuffer;
+      // Process every page with its highlights burned on canvas
+      const processedPages: { renderedImage: string }[] = [];
 
-      // Apply highlights sequentially page by page
-      for (const [pageIdxStr, hls] of Object.entries(highlightsMap) as [string, HighlightRect[]][]) {
-        const pageIdx = parseInt(pageIdxStr, 10);
-        if (hls && hls.length > 0) {
-          const resultBytes = await PDFToolsEngine.highlightPDF(currentBuffer, pageIdx, hls);
-          currentBuffer = resultBytes.buffer as ArrayBuffer;
-        }
+      for (const page of pages) {
+        const pageHls = highlightsMap[page.id] || [];
+        const burnedImage = await PDFToolsEngine.burnHighlightsToImage(
+          page.renderedImage,
+          pageHls
+        );
+        processedPages.push({ renderedImage: burnedImage });
       }
 
-      const blob = new Blob([currentBuffer], { type: "application/pdf" });
+      const blob = await PDFToolsEngine.generatePDFFromPages(processedPages);
       const url = URL.createObjectURL(blob);
       const fileName = `Highlight_${generateDocumentFileName()}`;
 
@@ -173,8 +413,8 @@ export const PDFHighlightModal: React.FC<PDFHighlightModalProps> = ({ onClose })
       setHighlightedPdfUrl(url);
       setHighlightedFileName(fileName);
     } catch (err: any) {
-      console.error("Highlight error:", err);
-      setErrorMsg(err.message || "Không thể bôi vàng PDF. Vui lòng thử lại.");
+      console.error("Export error:", err);
+      setErrorMsg(err.message || "Không thể xuất file PDF. Vui lòng thử lại.");
     } finally {
       setIsProcessing(false);
     }
@@ -187,23 +427,26 @@ export const PDFHighlightModal: React.FC<PDFHighlightModalProps> = ({ onClose })
 
   const handleShare = async () => {
     if (!highlightedBlob) return;
-    await PDFGenerator.sharePDFOrImage(highlightedBlob, highlightedFileName, "Tài liệu PDF đã Highlight");
+    await PDFGenerator.sharePDFOrImage(highlightedBlob, highlightedFileName, "Tài liệu PDF Highlight");
   };
 
-  const currentHighlights = highlightsMap[currentPageIndex] || [];
+  const canUndo = currentPage && (historyMap[currentPage.id] || []).length > 0;
+  const canRedo = currentPage && (redoMap[currentPage.id] || []).length > 0;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md select-none">
-      <div className="relative w-full max-w-xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-950/90 backdrop-blur-md select-none">
+      <div className="relative w-full max-w-5xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col h-[94vh] max-h-[94vh]">
         {/* Modal Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 bg-slate-900/90">
+        <div className="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-slate-800 bg-slate-900/95 shrink-0">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-2xl bg-amber-500/20 text-amber-400 border border-amber-500/30">
+            <div className="p-2 rounded-2xl bg-amber-500/20 text-amber-400 border border-amber-500/30">
               <Highlighter className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-white">Highlight PDF (Bôi vàng văn bản)</h3>
-              <p className="text-xs text-slate-400">Kéo thả chuột/ngón tay để đánh dấu vùng quan trọng</p>
+              <h3 className="text-base font-bold text-white">Highlight PDF (Bôi vàng & Đánh dấu)</h3>
+              <p className="text-xs text-slate-400">
+                Xem toàn bộ các trang, phóng to tô từng dòng chữ nhỏ, xoay & cắt trang linh hoạt
+              </p>
             </div>
           </div>
 
@@ -216,9 +459,9 @@ export const PDFHighlightModal: React.FC<PDFHighlightModalProps> = ({ onClose })
         </div>
 
         {/* Modal Body */}
-        <div className="p-5 flex-1 overflow-y-auto space-y-4">
+        <div className="flex-1 flex flex-col overflow-hidden bg-slate-950">
           {errorMsg && (
-            <div className="p-3 rounded-2xl bg-red-950/50 border border-red-800/60 text-red-300 text-xs flex items-center gap-2">
+            <div className="m-3 p-3 rounded-2xl bg-red-950/60 border border-red-800/80 text-red-300 text-xs flex items-center gap-2.5 shrink-0">
               <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
               <span>{errorMsg}</span>
             </div>
@@ -226,134 +469,421 @@ export const PDFHighlightModal: React.FC<PDFHighlightModalProps> = ({ onClose })
 
           {!highlightedPdfUrl ? (
             <>
-              {!file ? (
-                /* File Upload Drop Area */
-                <label
-                  htmlFor="pdf-hl-input"
-                  className="flex flex-col items-center justify-center p-8 border-2 border-dashed border-slate-700 hover:border-amber-500/80 rounded-2xl bg-slate-950/50 cursor-pointer transition text-center group"
-                >
-                  <div className="p-3.5 rounded-full bg-amber-500/10 text-amber-400 group-hover:scale-110 transition mb-3">
-                    <Upload className="w-7 h-7" />
-                  </div>
-                  <p className="text-sm font-semibold text-white">Chọn tệp PDF cần bôi vàng</p>
-                  <p className="text-xs text-slate-400 mt-1">Bấm để tải tệp PDF từ điện thoại hoặc máy tính</p>
-                  <input
-                    id="pdf-hl-input"
-                    type="file"
-                    accept="application/pdf,.pdf"
-                    onChange={handleFileChange}
-                    className="hidden"
-                  />
-                </label>
+              {!file || pages.length === 0 ? (
+                /* File Upload Area */
+                <div className="flex-1 flex items-center justify-center p-6">
+                  <label
+                    htmlFor="pdf-hl-input"
+                    className="flex flex-col items-center justify-center p-10 sm:p-14 border-2 border-dashed border-slate-700 hover:border-amber-500/80 rounded-3xl bg-slate-950/60 cursor-pointer transition text-center group max-w-lg w-full"
+                  >
+                    <div className="p-4 rounded-2xl bg-amber-500/10 text-amber-400 group-hover:scale-110 transition mb-3">
+                      <Upload className="w-8 h-8" />
+                    </div>
+                    <h4 className="text-base font-bold text-white">Bấm để chọn tệp PDF cần Highlight</h4>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Xem được toàn bộ các trang, hỗ trợ phóng to 400% để tô chuẩn từng chữ nhỏ nhất.
+                    </p>
+                    <span className="mt-4 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition shadow-lg shadow-amber-500/30">
+                      Chọn tệp PDF
+                    </span>
+                    <input
+                      ref={fileInputRef}
+                      id="pdf-hl-input"
+                      type="file"
+                      accept="application/pdf,.pdf"
+                      onChange={handleFileChange}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
               ) : (
-                /* Canvas Interactive Highlight Board */
-                <div className="space-y-3">
-                  {/* Page Controls & Navigation */}
-                  <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs">
+                /* Full Multi-Page Highlighting Studio */
+                <div className="flex-1 flex flex-col overflow-hidden">
+                  {/* Top Control Bar: Drawing Tools, Brush Sizes, Colors, Zoom, Undo */}
+                  <div className="px-3 sm:px-4 py-2.5 bg-slate-900 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 shrink-0">
+                    {/* Left: Tools Picker */}
+                    <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                      <button
+                        onClick={() => setDrawTool("pen")}
+                        className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition ${
+                          drawTool === "pen"
+                            ? "bg-amber-500 text-slate-950 shadow"
+                            : "text-slate-400 hover:text-white"
+                        }`}
+                        title="Bút dạ quang tự do (Tô theo từng nét chữ)"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Bút tô</span>
+                      </button>
+
+                      <button
+                        onClick={() => setDrawTool("box")}
+                        className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition ${
+                          drawTool === "box"
+                            ? "bg-amber-500 text-slate-950 shadow"
+                            : "text-slate-400 hover:text-white"
+                        }`}
+                        title="Kéo hộp chữ nhật (Thẳng theo dòng)"
+                      >
+                        <Square className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Kéo dải</span>
+                      </button>
+
+                      <button
+                        onClick={() => setDrawTool("eraser")}
+                        className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition ${
+                          drawTool === "eraser"
+                            ? "bg-amber-500 text-slate-950 shadow"
+                            : "text-slate-400 hover:text-white"
+                        }`}
+                        title="Tẩy xóa nét highlight"
+                      >
+                        <Eraser className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Tẩy</span>
+                      </button>
+
+                      <button
+                        onClick={() => setDrawTool("pan")}
+                        className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition ${
+                          drawTool === "pan"
+                            ? "bg-blue-600 text-white shadow"
+                            : "text-slate-400 hover:text-white"
+                        }`}
+                        title="Di chuyển trang (Khi phóng to)"
+                      >
+                        <Move className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Di chuyển</span>
+                      </button>
+                    </div>
+
+                    {/* Middle: Color Palette & Brush Size */}
+                    <div className="flex items-center gap-2">
+                      {/* Color Palette */}
+                      <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                        {HIGHLIGHT_COLORS.map((c) => (
+                          <button
+                            key={c.hex}
+                            onClick={() => setSelectedColor(c.hex)}
+                            className={`w-6 h-6 rounded-full transition transform ${c.bg} ${
+                              selectedColor === c.hex
+                                ? "ring-2 ring-white scale-110 shadow-md"
+                                : "opacity-75 hover:opacity-100"
+                            }`}
+                            title={c.name}
+                          />
+                        ))}
+                      </div>
+
+                      {/* Brush Size Picker */}
+                      <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                        {BRUSH_SIZES.map((b, idx) => (
+                          <button
+                            key={idx}
+                            onClick={() => setSelectedSizeIndex(idx)}
+                            className={`px-2 py-1 rounded-lg text-[11px] font-bold transition ${
+                              selectedSizeIndex === idx
+                                ? "bg-slate-800 text-white border border-slate-700"
+                                : "text-slate-400 hover:text-slate-200"
+                            }`}
+                            title={b.label}
+                          >
+                            <span className="flex items-center gap-1">
+                              <span
+                                className="rounded-full bg-amber-400 inline-block"
+                                style={{ width: `${6 + idx * 3}px`, height: `${6 + idx * 3}px` }}
+                              />
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Right: Zoom & History Controls */}
+                    <div className="flex items-center gap-1.5">
+                      {/* Zoom Controls */}
+                      <div className="flex items-center gap-1 bg-slate-950 px-2 py-1 rounded-xl border border-slate-800 text-xs">
+                        <button
+                          onClick={() => handleZoom("out")}
+                          className="p-1 text-slate-400 hover:text-white"
+                          title="Thu nhỏ"
+                        >
+                          <ZoomOut className="w-3.5 h-3.5" />
+                        </button>
+                        <span className="font-mono text-[11px] text-amber-400 min-w-[38px] text-center font-bold">
+                          {Math.round(zoomLevel * 100)}%
+                        </span>
+                        <button
+                          onClick={() => handleZoom("in")}
+                          className="p-1 text-slate-400 hover:text-white"
+                          title="Phóng to"
+                        >
+                          <ZoomIn className="w-3.5 h-3.5" />
+                        </button>
+                        {zoomLevel !== 1.0 && (
+                          <button
+                            onClick={() => handleZoom("reset")}
+                            className="p-1 text-slate-400 hover:text-white"
+                            title="Đặt lại 100%"
+                          >
+                            <Maximize className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Undo / Redo */}
+                      <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                        <button
+                          onClick={handleUndo}
+                          disabled={!canUndo}
+                          className="p-1.5 rounded text-slate-400 hover:text-white disabled:opacity-30"
+                          title="Hoàn tác (Undo)"
+                        >
+                          <Undo className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={handleRedo}
+                          disabled={!canRedo}
+                          className="p-1.5 rounded text-slate-400 hover:text-white disabled:opacity-30"
+                          title="Làm lại (Redo)"
+                        >
+                          <Redo className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+
+                      {/* Page Rotate & Crop tools */}
+                      <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                        <button
+                          onClick={handleRotateCurrentPage}
+                          className="p-1.5 rounded text-emerald-400 hover:text-emerald-300"
+                          title="Xoay trang 90°"
+                        >
+                          <RotateCw className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => currentPage && setCroppingPage(currentPage)}
+                          className="p-1.5 rounded text-blue-400 hover:text-blue-300"
+                          title="Cắt lề / Crop trang"
+                        >
+                          <Crop className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={handleClearCurrentPage}
+                          className="p-1.5 rounded text-red-400 hover:text-red-300"
+                          title="Xóa highlight trang này"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Main Page Viewport with Zoom and Interactive Highlight Stage */}
+                  <div className="relative flex-1 w-full overflow-hidden bg-slate-950 flex items-center justify-center p-2 sm:p-4">
+                    {currentPage && (
+                      <div
+                        className="relative max-h-full max-w-full flex items-center justify-center overflow-auto rounded-xl shadow-2xl transition-transform"
+                        style={{
+                          transform: `scale(${zoomLevel}) translate(${panOffset.x / zoomLevel}px, ${
+                            panOffset.y / zoomLevel
+                          }px)`,
+                          transformOrigin: "center center",
+                        }}
+                      >
+                        {/* Interactive Page Container */}
+                        <div
+                          ref={pageContainerRef}
+                          onPointerDown={handlePointerDown}
+                          onPointerMove={handlePointerMove}
+                          onPointerUp={handlePointerUp}
+                          onPointerCancel={handlePointerUp}
+                          className={`relative inline-block select-none touch-none ${
+                            drawTool === "pan" ? "cursor-grab active:cursor-grabbing" : "cursor-crosshair"
+                          }`}
+                        >
+                          {/* Base PDF Rendered Page Image */}
+                          <img
+                            src={currentPage.renderedImage}
+                            alt={`Trang ${currentPageIndex + 1}`}
+                            className="max-h-[62vh] sm:max-h-[66vh] w-auto object-contain rounded-lg shadow-xl pointer-events-none bg-white"
+                          />
+
+                          {/* Applied Highlights Layer */}
+                          <svg className="absolute inset-0 w-full h-full pointer-events-none overflow-visible">
+                            {currentHighlights.map((hl) => {
+                              if (
+                                hl.type === "box" &&
+                                hl.x !== undefined &&
+                                hl.y !== undefined &&
+                                hl.w !== undefined &&
+                                hl.h !== undefined
+                              ) {
+                                return (
+                                  <rect
+                                    key={hl.id}
+                                    x={`${hl.x * 100}%`}
+                                    y={`${hl.y * 100}%`}
+                                    width={`${hl.w * 100}%`}
+                                    height={`${hl.h * 100}%`}
+                                    fill={hl.color}
+                                    fillOpacity={hl.opacity}
+                                    rx={2}
+                                    style={{ mixBlendMode: "multiply" }}
+                                  />
+                                );
+                              } else if (hl.type === "path" && hl.points && hl.points.length > 0) {
+                                const d = hl.points.reduce((acc, pt, i) => {
+                                  return i === 0
+                                    ? `M ${pt.x * 100} ${pt.y * 100}`
+                                    : `${acc} L ${pt.x * 100} ${pt.y * 100}`;
+                                }, "");
+                                return (
+                                  <path
+                                    key={hl.id}
+                                    d={d}
+                                    fill="none"
+                                    stroke={hl.color}
+                                    strokeWidth={`${(hl.size || 0.016) * 100}%`}
+                                    strokeOpacity={hl.opacity}
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    vectorEffect="non-scaling-stroke"
+                                    style={{ mixBlendMode: "multiply" }}
+                                  />
+                                );
+                              }
+                              return null;
+                            })}
+
+                            {/* Active Draft Drawing Strokes */}
+                            {isDrawing && drawTool === "pen" && currentPathPoints.length > 0 && (
+                              <path
+                                d={currentPathPoints.reduce((acc, pt, i) => {
+                                  return i === 0
+                                    ? `M ${pt.x * 100} ${pt.y * 100}`
+                                    : `${acc} L ${pt.x * 100} ${pt.y * 100}`;
+                                }, "")}
+                                fill="none"
+                                stroke={selectedColor}
+                                strokeWidth={`${BRUSH_SIZES[selectedSizeIndex].sizeFactor * 100}%`}
+                                strokeOpacity={0.5}
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                vectorEffect="non-scaling-stroke"
+                                style={{ mixBlendMode: "multiply" }}
+                              />
+                            )}
+
+                            {isDrawing && drawTool === "box" && currentDraftBox && (
+                              <rect
+                                x={`${currentDraftBox.x * 100}%`}
+                                y={`${currentDraftBox.y * 100}%`}
+                                width={`${currentDraftBox.w * 100}%`}
+                                height={`${currentDraftBox.h * 100}%`}
+                                fill={selectedColor}
+                                fillOpacity={0.5}
+                                stroke={selectedColor}
+                                strokeWidth="1"
+                                rx={2}
+                                style={{ mixBlendMode: "multiply" }}
+                              />
+                            )}
+                          </svg>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Bottom Multi-Page Thumbnail Carousel Bar */}
+                  <div className="px-4 py-2.5 bg-slate-900 border-t border-slate-800 flex items-center justify-between gap-3 shrink-0">
+                    {/* Navigation Buttons */}
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => setCurrentPageIndex((prev) => Math.max(0, prev - 1))}
                         disabled={currentPageIndex === 0}
-                        className="p-1.5 rounded-lg bg-slate-900 text-slate-300 hover:text-white disabled:opacity-30"
+                        className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white disabled:opacity-30 transition"
                       >
                         <ChevronLeft className="w-4 h-4" />
                       </button>
-                      <span className="font-bold text-white">
-                        Trang {currentPageIndex + 1} / {totalPages}
+                      <span className="text-xs font-bold text-white min-w-[70px] text-center">
+                        Trang {currentPageIndex + 1} / {pages.length}
                       </span>
                       <button
-                        onClick={() => setCurrentPageIndex((prev) => Math.min(totalPages - 1, prev + 1))}
-                        disabled={currentPageIndex === totalPages - 1}
-                        className="p-1.5 rounded-lg bg-slate-900 text-slate-300 hover:text-white disabled:opacity-30"
+                        onClick={() => setCurrentPageIndex((prev) => Math.min(pages.length - 1, prev + 1))}
+                        disabled={currentPageIndex === pages.length - 1}
+                        className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white disabled:opacity-30 transition"
                       >
                         <ChevronRight className="w-4 h-4" />
                       </button>
                     </div>
 
-                    <div className="flex items-center gap-2">
-                      <span className="text-[11px] text-amber-400 font-semibold">
-                        {currentHighlights.length} điểm bôi vàng
-                      </span>
-                      {currentHighlights.length > 0 && (
-                        <button
-                          onClick={handleClearCurrentPageHighlights}
-                          className="flex items-center gap-1 px-2 py-1 rounded bg-red-950/40 text-red-400 hover:bg-red-900/40 text-[10px] font-semibold border border-red-800/40"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                          <span>Xóa trang này</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
+                    {/* Horizontal Page Thumbnails */}
+                    <div className="flex-1 flex items-center gap-2 overflow-x-auto py-1 px-2 max-w-xl mx-auto scrollbar-thin">
+                      {pages.map((p, idx) => {
+                        const isCurrent = idx === currentPageIndex;
+                        const pageHlCount = (highlightsMap[p.id] || []).length;
 
-                  {/* Interactive Page Canvas Stage */}
-                  <div className="relative w-full aspect-[1/1.414] max-h-80 mx-auto rounded-2xl bg-white border-2 border-dashed border-amber-500/50 shadow-inner overflow-hidden flex items-center justify-center">
-                    <div
-                      ref={pageContainerRef}
-                      onPointerDown={handlePointerDown}
-                      onPointerMove={handlePointerMove}
-                      onPointerUp={handlePointerUp}
-                      className="relative w-full h-full cursor-crosshair touch-none select-none bg-slate-50 flex flex-col justify-center items-center p-6 text-center"
+                        return (
+                          <button
+                            key={p.id}
+                            onClick={() => {
+                              setCurrentPageIndex(idx);
+                              setZoomLevel(1.0);
+                              setPanOffset({ x: 0, y: 0 });
+                            }}
+                            className={`relative shrink-0 w-11 h-14 rounded-lg border-2 overflow-hidden bg-slate-950 transition ${
+                              isCurrent
+                                ? "border-amber-400 ring-2 ring-amber-500/40 scale-105"
+                                : "border-slate-800 opacity-60 hover:opacity-100"
+                            }`}
+                          >
+                            <img
+                              src={p.renderedImage}
+                              alt={`Trang ${idx + 1}`}
+                              className="w-full h-full object-cover"
+                            />
+                            <span className="absolute bottom-0 inset-x-0 bg-slate-950/85 text-[9px] text-white font-bold text-center">
+                              {idx + 1}
+                            </span>
+                            {pageHlCount > 0 && (
+                              <span className="absolute top-0.5 right-0.5 w-2 h-2 rounded-full bg-amber-400 shadow" />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Export Action Button */}
+                    <button
+                      onClick={handleExportPDF}
+                      disabled={isProcessing}
+                      className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/30 disabled:opacity-40 transition active:scale-98 shrink-0"
                     >
-                      {/* Document Placeholder Lines */}
-                      <div className="w-full space-y-3 pointer-events-none opacity-40">
-                        <div className="h-4 bg-slate-400 rounded w-2/3 mx-auto" />
-                        <div className="h-2.5 bg-slate-300 rounded w-full" />
-                        <div className="h-2.5 bg-slate-300 rounded w-5/6" />
-                        <div className="h-2.5 bg-slate-300 rounded w-4/5" />
-                        <div className="h-2.5 bg-slate-300 rounded w-full" />
-                        <div className="h-2.5 bg-slate-300 rounded w-3/4" />
-                        <div className="h-2.5 bg-slate-300 rounded w-5/6" />
-                        <div className="h-2.5 bg-slate-300 rounded w-2/3" />
-                      </div>
-
-                      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                        <span className="px-3 py-1.5 rounded-full bg-slate-900/80 backdrop-blur text-white text-[11px] font-semibold shadow-lg">
-                          👆 Kéo tay hoặc chuột trên khung để bôi vàng
-                        </span>
-                      </div>
-
-                      {/* Render Applied Highlights on this page */}
-                      {currentHighlights.map((hl, i) => (
-                        <div
-                          key={i}
-                          style={{
-                            left: `${hl.x * 100}%`,
-                            top: `${hl.y * 100}%`,
-                            width: `${hl.width * 100}%`,
-                            height: `${hl.height * 100}%`,
-                          }}
-                          className="absolute bg-amber-400/40 border border-amber-500/80 rounded pointer-events-none transition-all shadow-sm"
-                        />
-                      ))}
-
-                      {/* Render Current Drawing Highlight Rect */}
-                      {isDrawing && currentDraftRect && (
-                        <div
-                          style={{
-                            left: `${currentDraftRect.x * 100}%`,
-                            top: `${currentDraftRect.y * 100}%`,
-                            width: `${currentDraftRect.width * 100}%`,
-                            height: `${currentDraftRect.height * 100}%`,
-                          }}
-                          className="absolute bg-amber-400/50 border-2 border-amber-500 rounded pointer-events-none animate-pulse"
-                        />
+                      {isProcessing ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          <span>Đang lưu PDF...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Check className="w-4 h-4" />
+                          <span>Lưu PDF Highlight</span>
+                        </>
                       )}
-                    </div>
+                    </button>
                   </div>
                 </div>
               )}
             </>
           ) : (
             /* Highlight Success View */
-            <div className="space-y-4 text-center py-4">
-              <div className="w-14 h-14 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto">
+            <div className="space-y-4 text-center py-10 px-4">
+              <div className="w-16 h-16 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto">
                 <Check className="w-8 h-8" />
               </div>
               <div>
-                <h4 className="text-base font-bold text-white">Highlight văn bản PDF thành công!</h4>
-                <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
-                  Đã thêm lớp bôi vàng vector sắc nét vào tài liệu PDF của bạn.
+                <h4 className="text-lg font-bold text-white">Highlight tài liệu PDF thành công!</h4>
+                <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+                  Đã ghi nhận toàn bộ các nét bút và vùng bôi vàng trên tất cả các trang với độ sắc nét cao.
                 </p>
                 <p className="text-xs font-mono text-amber-400 mt-2 bg-slate-950/80 py-1 px-3 rounded-lg inline-block border border-slate-800">
                   {highlightedFileName}
@@ -361,7 +891,7 @@ export const PDFHighlightModal: React.FC<PDFHighlightModalProps> = ({ onClose })
               </div>
 
               {/* Action Buttons */}
-              <div className="grid grid-cols-2 gap-3 pt-2">
+              <div className="grid grid-cols-2 gap-3 pt-3 max-w-md mx-auto">
                 <button
                   onClick={handleDownload}
                   className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition active:scale-98 shadow-lg shadow-amber-500/30"
@@ -382,40 +912,26 @@ export const PDFHighlightModal: React.FC<PDFHighlightModalProps> = ({ onClose })
                 onClick={() => {
                   setHighlightedPdfUrl(null);
                   setHighlightedBlob(null);
-                  setFile(null);
-                  setArrayBuffer(null);
-                  setHighlightsMap({});
                 }}
-                className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 mt-2"
+                className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 mt-3"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
-                <span>Highlight tệp PDF khác</span>
+                <span>Tiếp tục chỉnh sửa nét tô</span>
               </button>
             </div>
           )}
         </div>
-
-        {/* Modal Footer */}
-        {!highlightedPdfUrl && (
-          <div className="p-4 border-t border-slate-800 bg-slate-900/90 flex items-center justify-between">
-            <button
-              onClick={onClose}
-              className="px-4 py-2.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-semibold"
-            >
-              Hủy
-            </button>
-
-            <button
-              onClick={handleApplyHighlight}
-              disabled={isProcessing || !file}
-              className="flex items-center gap-2 px-6 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/30 disabled:opacity-40 transition active:scale-98"
-            >
-              <Check className="w-4 h-4" />
-              <span>{isProcessing ? "Đang áp dụng..." : "Lưu PDF Highlight"}</span>
-            </button>
-          </div>
-        )}
       </div>
+
+      {/* Crop Modal for Active Page */}
+      {croppingPage && (
+        <PDFPageCropModal
+          imageSrc={croppingPage.renderedImage}
+          pageNumber={currentPageIndex + 1}
+          onComplete={handleCropComplete}
+          onCancel={() => setCroppingPage(null)}
+        />
+      )}
     </div>
   );
 };

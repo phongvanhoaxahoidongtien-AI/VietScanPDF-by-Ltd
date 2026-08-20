@@ -359,7 +359,7 @@ export class CVEngine {
     }
 
     // 7. Bright/Dark Background Threshold Fallback
-    if (!bestQuad || bestScore < 0.38) {
+    if (!bestQuad || bestScore < 0.35) {
       const brightQuad = this.findBrightDocumentRegionQuad(blurred, workW, workH, avgLuma);
       if (brightQuad) {
         const sortedBright = this.orderQuadPoints([
@@ -377,7 +377,7 @@ export class CVEngine {
 
     // 8. Map coordinates back to full resolution
     const invScale = 1 / scale;
-    if (bestQuad && bestScore >= 0.36) {
+    if (bestQuad && bestScore >= 0.26) {
       const fullQuad: QuadPoints = {
         topLeft: {
           x: Math.max(0, Math.min(srcWidth, Math.round(bestQuad.topLeft.x * invScale))),
@@ -626,11 +626,11 @@ export class CVEngine {
     // 1. Skew / Orthogonality check
     const orthoScore = this.calculateOrthogonalityScore(quad);
     const skewScore = Math.round(orthoScore * 100);
-    const isWellAligned = orthoScore >= 0.65;
+    const isWellAligned = orthoScore >= 0.45;
 
     // 2. Size Check
-    const minSize = mode === "card" ? 0.16 : 0.20;
-    const isGoodSize = sizeRatio >= minSize && sizeRatio <= 0.88;
+    const minSize = mode === "card" ? 0.12 : 0.14;
+    const isGoodSize = sizeRatio >= minSize && sizeRatio <= 0.95;
 
     // Sample interior region on small preview canvas to evaluate Blur & Glare
     const sampleW = 120;
@@ -711,9 +711,9 @@ export class CVEngine {
     const lapVar = lapSqSum / Math.max(1, lapCount) - lapMean * lapMean;
     const sharpness = Math.min(100, Math.round(Math.sqrt(Math.max(0, lapVar)) * 3.5));
 
-    const isSharp = sharpness >= 24;
-    const isWellExposed = brightness >= 45 && brightness <= 235;
-    const hasNoGlare = glarePercent <= 10.0;
+    const isSharp = sharpness >= 12;
+    const isWellExposed = brightness >= 25 && brightness <= 245;
+    const hasNoGlare = glarePercent <= 25.0;
 
     // Determine smart guidance code
     let guidanceCode: DocumentQualityCheck["guidanceCode"] = "READY";
@@ -722,13 +722,13 @@ export class CVEngine {
     if (sizeRatio < minSize) {
       guidanceCode = "TOO_SMALL";
       guidanceText = "Đưa điện thoại gần tài liệu hơn";
-    } else if (sizeRatio > 0.88) {
+    } else if (sizeRatio > 0.95) {
       guidanceCode = "TOO_LARGE";
       guidanceText = "Đưa điện thoại ra xa một chút";
     } else if (!isWellAligned) {
       guidanceCode = "TOO_SKEWED";
       guidanceText = "Căn thẳng góc với tài liệu";
-    } else if (!isWellExposed && brightness < 45) {
+    } else if (!isWellExposed && brightness < 25) {
       guidanceCode = "TOO_DARK";
       guidanceText = "Tăng ánh sáng để ảnh rõ hơn";
     } else if (!hasNoGlare) {
@@ -739,8 +739,7 @@ export class CVEngine {
       guidanceText = "Giữ điện thoại ổn định để lấy nét";
     }
 
-    const isReadyForCapture =
-      isSharp && isWellExposed && hasNoGlare && isGoodSize && isWellAligned;
+    const isReadyForCapture = isGoodSize && isWellAligned && isSharp;
 
     return {
       sharpness,

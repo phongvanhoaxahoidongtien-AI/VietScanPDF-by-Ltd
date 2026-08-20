@@ -55,25 +55,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onClearAl
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-slate-950 text-white select-none">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 bg-slate-900 border-b border-slate-800">
+    <div className="fixed inset-0 z-50 flex flex-col bg-slate-950 text-white select-none overflow-hidden">
+      {/* Header with Safe Area spacing and robust touch target */}
+      <div className="sticky top-0 z-20 flex items-center justify-between px-4 py-3 sm:py-4 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 shadow-md shrink-0">
         <button
           id="btn-settings-back"
           onClick={onClose}
-          className="flex items-center gap-1 px-3 py-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 active:scale-95 transition text-sm font-medium"
+          className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-750 active:bg-slate-700 border border-slate-700/80 text-slate-100 hover:text-white active:scale-95 transition text-sm font-semibold shadow-sm min-h-[44px]"
         >
-          <ArrowLeft className="w-5 h-5" />
+          <ArrowLeft className="w-5 h-5 text-blue-400" />
           <span>Quay lại</span>
         </button>
 
-        <h2 className="text-sm font-bold text-white">Cài đặt & Thông tin</h2>
+        <h2 className="text-sm font-bold text-white tracking-wide">Cài đặt & Thông tin</h2>
 
         <div className="w-16" />
       </div>
 
       {/* Settings Body */}
-      <div className="flex-1 overflow-y-auto p-4 max-w-2xl w-full mx-auto flex flex-col gap-5">
+      <div className="flex-1 overflow-y-auto p-4 max-w-2xl w-full mx-auto flex flex-col gap-5 pb-32">
         {/* Privacy Highlight Card */}
         <div className="bg-gradient-to-r from-blue-950/40 to-indigo-950/40 border border-blue-800/40 rounded-2xl p-4 flex items-start gap-3.5">
           <div className="p-2.5 rounded-xl bg-blue-600/20 text-blue-400 shrink-0">

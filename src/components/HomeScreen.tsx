@@ -13,6 +13,8 @@ import {
   ChevronRight,
   Scissors,
   Highlighter,
+  QrCode,
+  ScanLine,
 } from "lucide-react";
 import { ScanMode, ScannedDocument } from "../types";
 
@@ -22,6 +24,8 @@ interface HomeScreenProps {
   onOpenPDFMerge: () => void;
   onOpenPDFSplit: () => void;
   onOpenPDFHighlight: () => void;
+  onOpenQRGenerator: () => void;
+  onOpenQRScanner: () => void;
   recentDocuments: ScannedDocument[];
   onSelectDocument: (doc: ScannedDocument) => void;
   onViewAllDocuments: () => void;
@@ -33,6 +37,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onOpenPDFMerge,
   onOpenPDFSplit,
   onOpenPDFHighlight,
+  onOpenQRGenerator,
+  onOpenQRScanner,
   recentDocuments,
   onSelectDocument,
   onViewAllDocuments,
@@ -198,6 +204,49 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         </div>
       </div>
 
+      {/* QR Code Section */}
+      <div className="mb-6">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">QR Code</h3>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* Tạo mã QR */}
+          <button
+            id="btn-qr-generate"
+            onClick={onOpenQRGenerator}
+            className="flex items-center gap-3.5 p-4 rounded-2xl bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-purple-500/40 active:scale-[0.98] transition text-left group shadow-sm"
+          >
+            <div className="p-3 rounded-xl bg-purple-500/10 text-purple-400 group-hover:bg-purple-600 group-hover:text-white transition shrink-0">
+              <QrCode className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <h4 className="text-sm font-bold text-white group-hover:text-purple-400 transition">Tạo Mã QR</h4>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Tạo QR văn bản, link, Wi-Fi, danh bạ & xuất ảnh PNG/PDF
+              </p>
+            </div>
+          </button>
+
+          {/* Quét / Đọc mã QR */}
+          <button
+            id="btn-qr-scan"
+            onClick={onOpenQRScanner}
+            className="flex items-center gap-3.5 p-4 rounded-2xl bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-cyan-500/40 active:scale-[0.98] transition text-left group shadow-sm"
+          >
+            <div className="p-3 rounded-xl bg-cyan-500/10 text-cyan-400 group-hover:bg-cyan-600 group-hover:text-white transition shrink-0">
+              <ScanLine className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <h4 className="text-sm font-bold text-white group-hover:text-cyan-400 transition">Quét / Đọc Mã QR</h4>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Quét camera/ảnh, đọc CCCD chip, Wi-Fi, link & tự sao chép
+              </p>
+            </div>
+          </button>
+        </div>
+      </div>
+
       {/* Recent Scans Section */}
       {recentDocuments.length > 0 && (
         <div>
@@ -251,3 +300,4 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     </div>
   );
 };
+

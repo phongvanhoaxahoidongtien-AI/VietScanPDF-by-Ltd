@@ -15,6 +15,8 @@ import { OCRViewerModal } from "./components/OCRViewerModal";
 import { PDFMergeModal } from "./components/PDFMergeModal";
 import { PDFSplitModal } from "./components/PDFSplitModal";
 import { PDFHighlightModal } from "./components/PDFHighlightModal";
+import { QRGeneratorModal } from "./components/QRGeneratorModal";
+import { QRScannerModal } from "./components/QRScannerModal";
 
 export default function App() {
   // Navigation & View States
@@ -35,6 +37,10 @@ export default function App() {
   const [isPDFMergeOpen, setIsPDFMergeOpen] = useState<boolean>(false);
   const [isPDFSplitOpen, setIsPDFSplitOpen] = useState<boolean>(false);
   const [isPDFHighlightOpen, setIsPDFHighlightOpen] = useState<boolean>(false);
+
+  // QR Code Modals
+  const [isQRGeneratorOpen, setIsQRGeneratorOpen] = useState<boolean>(false);
+  const [isQRScannerOpen, setIsQRScannerOpen] = useState<boolean>(false);
 
   const hiddenFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -143,8 +149,14 @@ export default function App() {
         const dataUrl = event.target?.result as string;
         const img = new Image();
         img.onload = () => {
-          const { quad } = CVEngine.detectDocumentQuad(img, img.naturalWidth, img.naturalHeight, "document");
-          const warped = CVEngine.warpPerspective(img, quad);
+          // Default to widest frame (4 full outer corners) as requested by user
+          const fullQuad = {
+            topLeft: { x: 0, y: 0 },
+            topRight: { x: img.naturalWidth, y: 0 },
+            bottomRight: { x: img.naturalWidth, y: img.naturalHeight },
+            bottomLeft: { x: 0, y: img.naturalHeight },
+          };
+          const warped = CVEngine.warpPerspective(img, fullQuad);
           const processedCanvas = CVEngine.applyFilter(warped, "document", 0);
           const processedUrl = processedCanvas.toDataURL("image/jpeg", 0.92);
 
@@ -152,7 +164,7 @@ export default function App() {
             id: `page_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
             originalImage: dataUrl,
             processedImage: processedUrl,
-            quad,
+            quad: fullQuad,
             filter: "document",
             rotation: 0,
             createdAt: Date.now(),
@@ -225,6 +237,8 @@ export default function App() {
               onOpenPDFMerge={() => setIsPDFMergeOpen(true)}
               onOpenPDFSplit={() => setIsPDFSplitOpen(true)}
               onOpenPDFHighlight={() => setIsPDFHighlightOpen(true)}
+              onOpenQRGenerator={() => setIsQRGeneratorOpen(true)}
+              onOpenQRScanner={() => setIsQRScannerOpen(true)}
               recentDocuments={allDocuments}
               onSelectDocument={(doc) => setActiveDocument(doc)}
               onViewAllDocuments={() => setActiveTab("documents")}
@@ -291,6 +305,15 @@ export default function App() {
 
       {isPDFHighlightOpen && (
         <PDFHighlightModal onClose={() => setIsPDFHighlightOpen(false)} />
+      )}
+
+      {/* QR Code Modals */}
+      {isQRGeneratorOpen && (
+        <QRGeneratorModal onClose={() => setIsQRGeneratorOpen(false)} />
+      )}
+
+      {isQRScannerOpen && (
+        <QRScannerModal onClose={() => setIsQRScannerOpen(false)} />
       )}
     </div>
   );

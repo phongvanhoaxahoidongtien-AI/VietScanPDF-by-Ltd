@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import {
   FileText,
   Upload,
@@ -9,12 +9,17 @@ import {
   Share2,
   AlertCircle,
   X,
-  Layers,
+  RotateCw,
+  Crop,
+  Eye,
+  RefreshCw,
+  CheckSquare,
+  Square,
 } from "lucide-react";
-import { PDFDocument } from "pdf-lib";
-import { PDFToolsEngine } from "../utils/pdfToolsEngine";
+import { PDFToolsEngine, PDFPageItem } from "../utils/pdfToolsEngine";
 import { PDFGenerator } from "../utils/pdfGenerator";
 import { generateDocumentFileName } from "../utils/naming";
+import { PDFPageCropModal } from "./PDFPageCropModal";
 
 interface PDFSplitModalProps {
   onClose: () => void;
@@ -22,16 +27,24 @@ interface PDFSplitModalProps {
 
 export const PDFSplitModal: React.FC<PDFSplitModalProps> = ({ onClose }) => {
   const [file, setFile] = useState<File | null>(null);
-  const [arrayBuffer, setArrayBuffer] = useState<ArrayBuffer | null>(null);
-  const [totalPages, setTotalPages] = useState<number>(0);
+  const [pages, setPages] = useState<PDFPageItem[]>([]);
+  const [selectedPageIds, setSelectedPageIds] = useState<string[]>([]);
   const [rangeInput, setRangeInput] = useState<string>("1");
-  const [selectedPages, setSelectedPages] = useState<number[]>([0]);
 
+  const [isExtracting, setIsExtracting] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Preview & Crop modal state
+  const [previewPage, setPreviewPage] = useState<PDFPageItem | null>(null);
+  const [croppingPage, setCroppingPage] = useState<PDFPageItem | null>(null);
+
+  // Split results
   const [splitPdfUrl, setSplitPdfUrl] = useState<string | null>(null);
   const [splitBlob, setSplitBlob] = useState<Blob | null>(null);
   const [splitFileName, setSplitFileName] = useState<string>("");
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -45,48 +58,139 @@ export const PDFSplitModal: React.FC<PDFSplitModalProps> = ({ onClose }) => {
 
     try {
       setErrorMsg(null);
+      setIsExtracting(true);
       const buffer = await f.arrayBuffer();
-      const pdfDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
-      const count = pdfDoc.getPageCount();
+      const extracted = await PDFToolsEngine.renderPDFToPages(buffer, f.name);
 
       setFile(f);
-      setArrayBuffer(buffer);
-      setTotalPages(count);
-      setRangeInput(count > 1 ? `1-${Math.min(count, 3)}` : "1");
-      setSelectedPages(
-        count > 1
-          ? Array.from({ length: Math.min(count, 3) }, (_, i) => i)
-          : [0]
-      );
-    } catch (err) {
+      setPages(extracted);
+
+      // Select first page by default or first 3 pages if multiple
+      const defaultSelected = extracted.slice(0, Math.min(extracted.length, 3)).map((p) => p.id);
+      setSelectedPageIds(defaultSelected);
+      setRangeInput(extracted.length > 1 ? `1-${Math.min(extracted.length, 3)}` : "1");
+    } catch (err: any) {
       console.error("Failed to read PDF:", err);
-      setErrorMsg("Không thể đọc tệp PDF. Có thể tệp bị khóa mật khẩu hoặc lỗi cấu trúc.");
+      setErrorMsg(err.message || "Không thể đọc tệp PDF. Vui lòng kiểm tra lại tệp.");
+    } finally {
+      setIsExtracting(false);
+      if (e.target) e.target.value = "";
     }
   };
 
+  // Toggle page selection
+  const togglePageSelect = (pageId: string) => {
+    let updated: string[];
+    if (selectedPageIds.includes(pageId)) {
+      updated = selectedPageIds.filter((id) => id !== pageId);
+    } else {
+      updated = [...selectedPageIds, pageId];
+    }
+    setSelectedPageIds(updated);
+
+    // Update range input string
+    const indices = updated
+      .map((id) => pages.findIndex((p) => p.id === id) + 1)
+      .filter((n) => n > 0)
+      .sort((a, b) => a - b);
+    setRangeInput(indices.join(", "));
+  };
+
+  // Handle manual range input typing
   const handleRangeChange = (val: string) => {
     setRangeInput(val);
-    if (totalPages > 0) {
-      const parsed = PDFToolsEngine.parsePageRanges(val, totalPages);
-      setSelectedPages(parsed);
+    if (pages.length > 0) {
+      const parsedIndices = PDFToolsEngine.parsePageRanges(val, pages.length);
+      const newSelectedIds = parsedIndices
+        .map((idx) => pages[idx]?.id)
+        .filter(Boolean) as string[];
+      setSelectedPageIds(newSelectedIds);
     }
   };
 
-  const togglePageSelect = (pageIndex: number) => {
-    let updated: number[];
-    if (selectedPages.includes(pageIndex)) {
-      updated = selectedPages.filter((p) => p !== pageIndex);
-    } else {
-      updated = [...selectedPages, pageIndex].sort((a, b) => a - b);
-    }
-    setSelectedPages(updated);
-    // Update range input text
-    setRangeInput(updated.map((p) => p + 1).join(", "));
+  const handleSelectAll = () => {
+    setSelectedPageIds(pages.map((p) => p.id));
+    setRangeInput(`1-${pages.length}`);
   };
 
+  const handleDeselectAll = () => {
+    setSelectedPageIds([]);
+    setRangeInput("");
+  };
+
+  const handleSelectEven = () => {
+    const evens = pages.filter((_, i) => (i + 1) % 2 === 0).map((p) => p.id);
+    setSelectedPageIds(evens);
+    setRangeInput(
+      pages
+        .map((_, i) => i + 1)
+        .filter((n) => n % 2 === 0)
+        .join(", ")
+    );
+  };
+
+  const handleSelectOdd = () => {
+    const odds = pages.filter((_, i) => (i + 1) % 2 !== 0).map((p) => p.id);
+    setSelectedPageIds(odds);
+    setRangeInput(
+      pages
+        .map((_, i) => i + 1)
+        .filter((n) => n % 2 !== 0)
+        .join(", ")
+    );
+  };
+
+  // Rotate single page 90 degrees
+  const handleRotatePage = async (pageId: string) => {
+    const pageIdx = pages.findIndex((p) => p.id === pageId);
+    if (pageIdx === -1) return;
+
+    const page = pages[pageIdx];
+    try {
+      const { dataUrl, width, height } = await PDFToolsEngine.rotateImageDataUrl(
+        page.renderedImage,
+        90
+      );
+      setPages((prev) =>
+        prev.map((p) =>
+          p.id === pageId
+            ? {
+                ...p,
+                renderedImage: dataUrl,
+                rotation: (p.rotation + 90) % 360,
+                width,
+                height,
+              }
+            : p
+        )
+      );
+    } catch (err) {
+      console.error("Rotate error:", err);
+    }
+  };
+
+  // Crop completion callback
+  const handleCropComplete = (newImageSrc: string) => {
+    if (!croppingPage) return;
+    setPages((prev) =>
+      prev.map((p) =>
+        p.id === croppingPage.id
+          ? {
+              ...p,
+              renderedImage: newImageSrc,
+              isCropped: true,
+            }
+          : p
+      )
+    );
+    setCroppingPage(null);
+  };
+
+  // Split and export selected pages
   const handleSplit = async () => {
-    if (!arrayBuffer || selectedPages.length === 0) {
-      setErrorMsg("Vui lòng chọn ít nhất 1 trang để tách.");
+    const selectedPages = pages.filter((p) => selectedPageIds.includes(p.id));
+    if (selectedPages.length === 0) {
+      setErrorMsg("Vui lòng chọn ít nhất 1 trang để trích xuất.");
       return;
     }
 
@@ -94,8 +198,7 @@ export const PDFSplitModal: React.FC<PDFSplitModalProps> = ({ onClose }) => {
     setErrorMsg(null);
 
     try {
-      const splitBytes = await PDFToolsEngine.splitPDF(arrayBuffer, selectedPages);
-      const blob = new Blob([splitBytes], { type: "application/pdf" });
+      const blob = await PDFToolsEngine.generatePDFFromPages(selectedPages);
       const url = URL.createObjectURL(blob);
       const fileName = `Tach_${generateDocumentFileName()}`;
 
@@ -121,17 +224,19 @@ export const PDFSplitModal: React.FC<PDFSplitModalProps> = ({ onClose }) => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md select-none">
-      <div className="relative w-full max-w-xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-slate-950/90 backdrop-blur-md select-none">
+      <div className="relative w-full max-w-4xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col h-[92vh] max-h-[92vh]">
         {/* Modal Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 bg-slate-900/90">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 bg-slate-900/95 shrink-0">
           <div className="flex items-center gap-3">
             <div className="p-2.5 rounded-2xl bg-emerald-600/20 text-emerald-400 border border-emerald-500/30">
               <Scissors className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-white">Tách trang PDF (Split PDF)</h3>
-              <p className="text-xs text-slate-400">Trích xuất trang lẻ hoặc khoảng trang mong muốn</p>
+              <h3 className="text-base font-bold text-white">Tách trang PDF (PDF Split)</h3>
+              <p className="text-xs text-slate-400">
+                Xem toàn bộ trang, tự do chọn trang, xoay 90° và cắt (crop) từng trang trước khi tách
+              </p>
             </div>
           </div>
 
@@ -144,9 +249,9 @@ export const PDFSplitModal: React.FC<PDFSplitModalProps> = ({ onClose }) => {
         </div>
 
         {/* Modal Body */}
-        <div className="p-5 flex-1 overflow-y-auto space-y-4">
+        <div className="p-4 sm:p-6 flex-1 overflow-y-auto space-y-4">
           {errorMsg && (
-            <div className="p-3 rounded-2xl bg-red-950/50 border border-red-800/60 text-red-300 text-xs flex items-center gap-2">
+            <div className="p-3.5 rounded-2xl bg-red-950/60 border border-red-800/80 text-red-300 text-xs flex items-center gap-2.5">
               <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
               <span>{errorMsg}</span>
             </div>
@@ -154,18 +259,24 @@ export const PDFSplitModal: React.FC<PDFSplitModalProps> = ({ onClose }) => {
 
           {!splitPdfUrl ? (
             <>
-              {!file ? (
+              {!file || pages.length === 0 ? (
                 /* File Upload Area */
                 <label
                   htmlFor="pdf-split-input"
-                  className="flex flex-col items-center justify-center p-8 border-2 border-dashed border-slate-700 hover:border-emerald-500/80 rounded-2xl bg-slate-950/50 cursor-pointer transition text-center group"
+                  className="flex flex-col items-center justify-center p-10 sm:p-14 border-2 border-dashed border-slate-700 hover:border-emerald-500/80 rounded-3xl bg-slate-950/60 cursor-pointer transition text-center group"
                 >
-                  <div className="p-3.5 rounded-full bg-emerald-600/10 text-emerald-400 group-hover:scale-110 transition mb-3">
-                    <Upload className="w-7 h-7" />
+                  <div className="p-4 rounded-2xl bg-emerald-600/10 text-emerald-400 group-hover:scale-110 transition mb-3">
+                    <Upload className="w-8 h-8" />
                   </div>
-                  <p className="text-sm font-semibold text-white">Chọn tệp PDF cần tách trang</p>
-                  <p className="text-xs text-slate-400 mt-1">Bấm để tải tệp PDF từ điện thoại hoặc máy tính</p>
+                  <h4 className="text-base font-bold text-white">Bấm để chọn tệp PDF cần tách</h4>
+                  <p className="text-xs text-slate-400 mt-1 max-w-md">
+                    Toàn bộ các trang sẽ được hiển thị dạng hình ảnh trực quan để bạn dễ dàng chọn lọc, xoay và cắt góc.
+                  </p>
+                  <span className="mt-4 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition shadow-lg shadow-emerald-600/30">
+                    Chọn tệp PDF
+                  </span>
                   <input
+                    ref={fileInputRef}
                     id="pdf-split-input"
                     type="file"
                     accept="application/pdf,.pdf"
@@ -174,73 +285,172 @@ export const PDFSplitModal: React.FC<PDFSplitModalProps> = ({ onClose }) => {
                   />
                 </label>
               ) : (
-                /* Page Selection Interface */
+                /* Page Selection & Tools Interface */
                 <div className="space-y-4">
-                  {/* File Info Bar */}
-                  <div className="flex items-center justify-between p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs">
-                    <div className="flex items-center gap-2 truncate max-w-[70%]">
-                      <FileText className="w-4 h-4 text-emerald-400 shrink-0" />
-                      <span className="font-semibold text-white truncate">{file.name}</span>
+                  {/* File Info & Quick Filters Bar */}
+                  <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 truncate max-w-md">
+                        <FileText className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <span className="text-xs font-bold text-white truncate">{file.name}</span>
+                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-800 text-emerald-400 font-bold">
+                          {pages.length} trang
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <button
+                          onClick={handleSelectAll}
+                          className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 text-[11px] font-semibold transition"
+                        >
+                          Chọn tất cả
+                        </button>
+                        <button
+                          onClick={handleSelectOdd}
+                          className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 text-[11px] font-semibold transition"
+                        >
+                          Trang lẻ
+                        </button>
+                        <button
+                          onClick={handleSelectEven}
+                          className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 text-[11px] font-semibold transition"
+                        >
+                          Trang chẵn
+                        </button>
+                        <button
+                          onClick={handleDeselectAll}
+                          className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-red-400 text-[11px] font-semibold transition"
+                        >
+                          Bỏ chọn
+                        </button>
+                      </div>
                     </div>
-                    <span className="px-2.5 py-1 rounded-full bg-slate-800 text-emerald-400 font-bold">
-                      {totalPages} trang
-                    </span>
+
+                    {/* Range Input Field */}
+                    <div className="flex items-center gap-3">
+                      <label className="text-xs font-semibold text-slate-400 shrink-0">
+                        Nhập khoảng trang:
+                      </label>
+                      <input
+                        type="text"
+                        value={rangeInput}
+                        onChange={(e) => handleRangeChange(e.target.value)}
+                        placeholder="Ví dụ: 1, 3-5, 8"
+                        className="flex-1 px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-700 text-white font-mono text-xs focus:outline-none focus:border-emerald-500"
+                      />
+                    </div>
                   </div>
 
-                  {/* Range Input Field */}
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                      Nhập dải trang muốn trích xuất (Ví dụ: 1, 3-5, 8):
-                    </label>
-                    <input
-                      type="text"
-                      value={rangeInput}
-                      onChange={(e) => handleRangeChange(e.target.value)}
-                      placeholder="1, 3-5"
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white font-medium text-xs focus:outline-none focus:border-emerald-500"
-                    />
-                  </div>
-
-                  {/* Page Grid Selector */}
-                  <div>
-                    <div className="flex items-center justify-between text-xs font-semibold text-slate-400 mb-2">
-                      <span>Hoặc bấm chọn trực tiếp các trang:</span>
-                      <span className="text-emerald-400 font-bold">Đã chọn: {selectedPages.length} trang</span>
+                  {isExtracting && (
+                    <div className="p-4 rounded-2xl bg-emerald-950/40 border border-emerald-800/50 flex items-center justify-center gap-3 text-xs text-emerald-300">
+                      <RefreshCw className="w-4 h-4 animate-spin text-emerald-400" />
+                      <span>Đang tải và hiển thị toàn bộ các trang...</span>
                     </div>
+                  )}
 
-                    <div className="grid grid-cols-5 sm:grid-cols-8 gap-2 max-h-48 overflow-y-auto pr-1">
-                      {Array.from({ length: totalPages }, (_, idx) => {
-                        const isSelected = selectedPages.includes(idx);
-                        return (
-                          <button
-                            key={idx}
-                            onClick={() => togglePageSelect(idx)}
-                            className={`flex flex-col items-center justify-center p-2 rounded-xl border text-xs font-bold transition active:scale-95 ${
+                  {/* Visual Grid of Pages with Selection & Edit Tools */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                    {pages.map((page, idx) => {
+                      const isSelected = selectedPageIds.includes(page.id);
+
+                      return (
+                        <div
+                          key={page.id}
+                          className={`group relative flex flex-col rounded-2xl border transition shadow-sm overflow-hidden ${
+                            isSelected
+                              ? "bg-slate-950 border-emerald-500/80 ring-2 ring-emerald-500/30"
+                              : "bg-slate-950/70 border-slate-800 hover:border-slate-700 opacity-70 hover:opacity-100"
+                          }`}
+                        >
+                          {/* Page Header Bar with Checkbox */}
+                          <div
+                            onClick={() => togglePageSelect(page.id)}
+                            className={`flex items-center justify-between px-3 py-2 border-b cursor-pointer transition ${
                               isSelected
-                                ? "bg-emerald-600 text-white border-emerald-400 shadow-md shadow-emerald-600/30"
-                                : "bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-700 hover:text-white"
+                                ? "bg-emerald-950/50 border-emerald-800/50 text-emerald-300"
+                                : "bg-slate-900 border-slate-800 text-slate-400"
                             }`}
                           >
-                            <FileText className="w-3.5 h-3.5 mb-1" />
-                            <span>{idx + 1}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
+                            <div className="flex items-center gap-2 font-bold text-xs">
+                              {isSelected ? (
+                                <CheckSquare className="w-4 h-4 text-emerald-400 shrink-0" />
+                              ) : (
+                                <Square className="w-4 h-4 text-slate-500 shrink-0" />
+                              )}
+                              <span>Trang {idx + 1}</span>
+                            </div>
+
+                            <div className="flex items-center gap-1">
+                              {page.rotation > 0 && (
+                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-400 font-mono">
+                                  {page.rotation}°
+                                </span>
+                              )}
+                              {page.isCropped && (
+                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-950 text-blue-400 font-medium">
+                                  Đã cắt
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Page Thumbnail Preview */}
+                          <div
+                            onClick={() => togglePageSelect(page.id)}
+                            className="relative aspect-[1/1.414] bg-slate-900 flex items-center justify-center overflow-hidden cursor-pointer p-2"
+                          >
+                            <img
+                              src={page.renderedImage}
+                              alt={`Trang ${idx + 1}`}
+                              className="w-full h-full object-contain drop-shadow-md rounded transition group-hover:scale-[1.02]"
+                            />
+                          </div>
+
+                          {/* Action Tools: Rotate, Crop, Preview */}
+                          <div className="p-2 bg-slate-900/90 border-t border-slate-800 flex items-center justify-around gap-1">
+                            <button
+                              onClick={() => handleRotatePage(page.id)}
+                              className="flex items-center gap-1 px-2 py-1 rounded-lg text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/40 text-[11px] font-semibold"
+                              title="Xoay 90°"
+                            >
+                              <RotateCw className="w-3.5 h-3.5" />
+                              <span>Xoay</span>
+                            </button>
+
+                            <button
+                              onClick={() => setCroppingPage(page)}
+                              className="flex items-center gap-1 px-2 py-1 rounded-lg text-blue-400 hover:text-blue-300 hover:bg-blue-950/40 text-[11px] font-semibold"
+                              title="Cắt góc / Crop trang"
+                            >
+                              <Crop className="w-3.5 h-3.5" />
+                              <span>Cắt</span>
+                            </button>
+
+                            <button
+                              onClick={() => setPreviewPage(page)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+                              title="Xem phóng to"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
             </>
           ) : (
             /* Split Success View */
-            <div className="space-y-4 text-center py-4">
-              <div className="w-14 h-14 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto">
+            <div className="space-y-4 text-center py-6">
+              <div className="w-16 h-16 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto">
                 <Check className="w-8 h-8" />
               </div>
               <div>
-                <h4 className="text-base font-bold text-white">Trích xuất trang PDF thành công!</h4>
-                <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
-                  Đã tạo file PDF mới gồm {selectedPages.length} trang đã chọn.
+                <h4 className="text-lg font-bold text-white">Trích xuất trang PDF thành công!</h4>
+                <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+                  Đã tạo file PDF mới gồm {selectedPageIds.length} trang đã chọn kèm theo góc xoay và các đường cắt của bạn.
                 </p>
                 <p className="text-xs font-mono text-emerald-400 mt-2 bg-slate-950/80 py-1 px-3 rounded-lg inline-block border border-slate-800">
                   {splitFileName}
@@ -248,7 +458,7 @@ export const PDFSplitModal: React.FC<PDFSplitModalProps> = ({ onClose }) => {
               </div>
 
               {/* Action Buttons */}
-              <div className="grid grid-cols-2 gap-3 pt-2">
+              <div className="grid grid-cols-2 gap-3 pt-3 max-w-md mx-auto">
                 <button
                   onClick={handleDownload}
                   className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition active:scale-98 shadow-lg shadow-emerald-600/30"
@@ -269,39 +479,81 @@ export const PDFSplitModal: React.FC<PDFSplitModalProps> = ({ onClose }) => {
                 onClick={() => {
                   setSplitPdfUrl(null);
                   setSplitBlob(null);
-                  setFile(null);
-                  setArrayBuffer(null);
                 }}
-                className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 mt-2"
+                className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 mt-3"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
-                <span>Tách tệp PDF khác</span>
+                <span>Tiếp tục chọn trang hoặc tách tệp khác</span>
               </button>
             </div>
           )}
         </div>
 
         {/* Modal Footer */}
-        {!splitPdfUrl && (
-          <div className="p-4 border-t border-slate-800 bg-slate-900/90 flex items-center justify-between">
-            <button
-              onClick={onClose}
-              className="px-4 py-2.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-semibold"
-            >
-              Hủy
-            </button>
+        {!splitPdfUrl && pages.length > 0 && (
+          <div className="p-4 border-t border-slate-800 bg-slate-900/95 flex items-center justify-between shrink-0">
+            <div className="text-xs text-slate-400">
+              Đã chọn: <strong className="text-emerald-400">{selectedPageIds.length}</strong> / {pages.length} trang
+            </div>
 
             <button
               onClick={handleSplit}
-              disabled={isProcessing || !file || selectedPages.length === 0}
+              disabled={isProcessing || selectedPageIds.length === 0}
               className="flex items-center gap-2 px-6 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-lg shadow-emerald-600/30 disabled:opacity-40 transition active:scale-98"
             >
-              <Scissors className="w-4 h-4" />
-              <span>{isProcessing ? "Đang tách..." : `Tách ${selectedPages.length} trang`}</span>
+              {isProcessing ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>Đang tách PDF...</span>
+                </>
+              ) : (
+                <>
+                  <Scissors className="w-4 h-4" />
+                  <span>Tách {selectedPageIds.length} trang đã chọn</span>
+                </>
+              )}
             </button>
           </div>
         )}
       </div>
+
+      {/* Full Page Zoom Preview Modal */}
+      {previewPage && (
+        <div
+          onClick={() => setPreviewPage(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative max-w-2xl max-h-[85vh] bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col items-center"
+          >
+            <button
+              onClick={() => setPreviewPage(null)}
+              className="absolute top-3 right-3 p-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <h4 className="text-sm font-bold text-white mb-2">Trang {previewPage.pageNumber}</h4>
+            <div className="flex-1 overflow-auto rounded-xl bg-slate-950 p-2 max-h-[70vh]">
+              <img
+                src={previewPage.renderedImage}
+                alt="Xem trước"
+                className="max-h-[68vh] object-contain rounded"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Crop Page Modal */}
+      {croppingPage && (
+        <PDFPageCropModal
+          imageSrc={croppingPage.renderedImage}
+          pageNumber={pages.findIndex((p) => p.id === croppingPage.id) + 1}
+          onComplete={handleCropComplete}
+          onCancel={() => setCroppingPage(null)}
+        />
+      )}
     </div>
   );
 };

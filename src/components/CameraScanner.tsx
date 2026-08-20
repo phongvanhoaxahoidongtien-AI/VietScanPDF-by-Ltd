@@ -592,18 +592,15 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         const dataUrl = event.target?.result as string;
         const img = new Image();
         img.onload = () => {
-          const targetAspectType = mode === "cccd" || mode === "driver_license" ? "card" : "document";
-          const detectedResult = CVEngine.detectDocumentQuad(
-            img,
-            img.naturalWidth,
-            img.naturalHeight,
-            targetAspectType
-          );
-          const q = detectedResult.isRealQuad
-            ? detectedResult.quad
-            : CVEngine.getDefaultQuad(img.naturalWidth, img.naturalHeight, targetAspectType);
+          // Default to widest frame (4 full outer corners) as requested by user
+          const fullQuad: QuadPoints = {
+            topLeft: { x: 0, y: 0 },
+            topRight: { x: img.naturalWidth, y: 0 },
+            bottomRight: { x: img.naturalWidth, y: img.naturalHeight },
+            bottomLeft: { x: 0, y: img.naturalHeight },
+          };
 
-          const warped = CVEngine.warpPerspective(img, q);
+          const warped = CVEngine.warpPerspective(img, fullQuad);
           const processedCanvas = CVEngine.applyFilter(warped, "document", 0);
           const processedUrl = processedCanvas.toDataURL("image/jpeg", 0.92);
           const pHash = CVEngine.computePerceptualHashFromCanvas(warped);
@@ -612,7 +609,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
             id: `page_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
             originalImage: dataUrl,
             processedImage: processedUrl,
-            quad: q,
+            quad: fullQuad,
             filter: "document",
             rotation: 0,
             createdAt: Date.now(),
