@@ -15,11 +15,15 @@ import {
   Award,
   IdCard,
   RefreshCw,
-  ShieldCheck,
+  Crop,
+  Trash2,
+  Plus,
 } from "lucide-react";
+import { motion, AnimatePresence } from "motion/react";
 import { ScanMode, QuadPoints, ScannedPage, FilterMode, Point } from "../types";
 import { CVEngine } from "../utils/cvEngine";
 import { DocumentTracker } from "../utils/documentTracker";
+import { CropAdjuster } from "./CropAdjuster";
 
 interface CameraScannerProps {
   initialMode?: ScanMode;
@@ -49,6 +53,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
   const [isInitializing, setIsInitializing] = useState<boolean>(true);
   const [guidance, setGuidance] = useState<string>("Đang khởi động camera...");
   const [isCapturing, setIsCapturing] = useState<boolean>(false);
+  const [isFlashing, setIsFlashing] = useState<boolean>(false);
   const [steadyCounter, setSteadyCounter] = useState<number>(0);
   const [stabilityScore, setStabilityScore] = useState<number>(0);
   const [confidenceScore, setConfidenceScore] = useState<number>(0);
@@ -58,6 +63,10 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
 
   // For 2-sided modes (CCCD / Driver License)
   const [cardSide, setCardSide] = useState<"front" | "back">("front");
+
+  // Page Review & Jumping sheet state
+  const [reviewingPage, setReviewingPage] = useState<ScannedPage | null>(null);
+  const [isAdjustingCrop, setIsAdjustingCrop] = useState<boolean>(false);
 
   // Document Tracker Instance
   const trackerRef = useRef<DocumentTracker>(new DocumentTracker());
@@ -155,7 +164,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
   const triggerCaptureFeedback = () => {
     try {
       if (navigator.vibrate) {
-        navigator.vibrate([40, 30, 40]);
+        navigator.vibrate([50, 40, 50]);
       }
       const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
       if (AudioCtxClass) {
@@ -164,12 +173,12 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         const gain = audioCtx.createGain();
         osc.type = "sine";
         osc.frequency.setValueAtTime(880, audioCtx.currentTime);
-        gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.12);
+        gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
         osc.connect(gain);
         gain.connect(audioCtx.destination);
         osc.start();
-        osc.stop(audioCtx.currentTime + 0.12);
+        osc.stop(audioCtx.currentTime + 0.15);
       }
     } catch (e) {
       // Audio autoplay policy fallback
@@ -179,10 +188,13 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
   // Perform Capture & Warp
   const captureFrame = useCallback(
     async (manualQuad?: QuadPoints) => {
-      if (!videoRef.current || isCapturingRef.current) return;
+      if (!videoRef.current || isCapturingRef.current || reviewingPage) return;
       isCapturingRef.current = true;
       setIsCapturing(true);
+      setIsFlashing(true);
       triggerCaptureFeedback();
+
+      setTimeout(() => setIsFlashing(false), 140);
 
       const video = videoRef.current;
       const vw = video.videoWidth || 1280;
@@ -231,40 +243,71 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         height: processedCanvas.height,
       };
 
-      // Handle 2-sided card mode (CCCD or Driver License)
-      if (mode === "cccd" || mode === "driver_license") {
-        if (cardSide === "front") {
-          onCapturePage(newPage, false);
-          setCardSide("back");
-          setGuidance("Lật sang MẶT SAU của thẻ");
-          trackerRef.current.reset();
-          setSteadyCounter(0);
-          setTimeout(() => {
-            isCapturingRef.current = false;
-            setIsCapturing(false);
-          }, 450);
-          return;
-        } else {
-          // Completed both sides!
-          onCapturePage(newPage, true);
-          setTimeout(() => {
-            isCapturingRef.current = false;
-            setIsCapturing(false);
-          }, 450);
-          return;
-        }
-      }
-
-      onCapturePage(newPage, false);
-      trackerRef.current.reset();
-      setSteadyCounter(0);
-      setTimeout(() => {
-        isCapturingRef.current = false;
-        setIsCapturing(false);
-      }, 450);
+      // Set page for instant review & jumping animation
+      setReviewingPage(newPage);
+      trackerRef.current.setCooldown(4000); // Lock auto-capture while reviewing
+      isCapturingRef.current = false;
+      setIsCapturing(false);
     },
-    [detectedQuad, mode, cardSide, onCapturePage]
+    [detectedQuad, mode, reviewingPage]
   );
+
+  // Confirm and proceed to next page / next side
+  const handleConfirmReviewPage = (finishImmediately: boolean = false) => {
+    if (!reviewingPage) return;
+
+    const pageToSave = reviewingPage;
+    setReviewingPage(null);
+    setIsAdjustingCrop(false);
+
+    if (mode === "cccd" || mode === "driver_license") {
+      if (cardSide === "front" && !finishImmediately) {
+        onCapturePage(pageToSave, false);
+        setCardSide("back");
+        setGuidance("Lật sang MẶT SAU của thẻ");
+        trackerRef.current.reset(1500);
+        setSteadyCounter(0);
+        return;
+      } else {
+        // Finished back side or direct finish
+        onCapturePage(pageToSave, true);
+        return;
+      }
+    }
+
+    onCapturePage(pageToSave, finishImmediately);
+    if (!finishImmediately) {
+      trackerRef.current.reset(1500);
+      setSteadyCounter(0);
+      setGuidance("Đưa trang tiếp theo vào khung hình");
+    }
+  };
+
+  // Discard current page and retake
+  const handleRetakeCurrentPage = () => {
+    setReviewingPage(null);
+    setIsAdjustingCrop(false);
+    trackerRef.current.reset(800);
+    setSteadyCounter(0);
+    setGuidance("Căn chỉnh lại tài liệu để chụp lại");
+  };
+
+  // Update crop from in-place CropAdjuster
+  const handleCropAdjustComplete = (warpedCanvas: HTMLCanvasElement, adjustedQuad: QuadPoints) => {
+    if (!reviewingPage) return;
+    const defaultFilter: FilterMode = reviewingPage.filter || "document";
+    const processedCanvas = CVEngine.applyFilter(warpedCanvas, defaultFilter, reviewingPage.rotation || 0);
+    const processedDataUrl = processedCanvas.toDataURL("image/jpeg", 0.92);
+
+    setReviewingPage({
+      ...reviewingPage,
+      processedImage: processedDataUrl,
+      quad: adjustedQuad,
+      width: processedCanvas.width,
+      height: processedCanvas.height,
+    });
+    setIsAdjustingCrop(false);
+  };
 
   // Real-time detection & 4-corner polygon tracking loop with Temporal Filter
   useEffect(() => {
@@ -272,7 +315,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
       const video = videoRef.current;
       const overlay = overlayCanvasRef.current;
 
-      if (video && video.readyState >= 2 && overlay && !isCapturingRef.current) {
+      if (video && video.readyState >= 2 && overlay && !isCapturingRef.current && !reviewingPage) {
         const vw = video.clientWidth;
         const vh = video.clientHeight;
 
@@ -466,7 +509,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           }
 
           // 7. Auto Capture Triggering (Strictly when isReadyForCapture === true)
-          if (autoCapture && trackResult.isReadyForCapture && !isCapturingRef.current) {
+          if (autoCapture && trackResult.isReadyForCapture && !isCapturingRef.current && !reviewingPage) {
             captureFrame(trackResult.smoothedQuad || undefined);
           }
         }
@@ -479,14 +522,14 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     return () => {
       if (animFrameId.current) cancelAnimationFrame(animFrameId.current);
     };
-  }, [autoCapture, mode, cardSide, captureFrame]);
+  }, [autoCapture, mode, cardSide, captureFrame, reviewingPage]);
 
-  // Handle local image file import
+  // Handle image import from device
   const handleFileImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    const fileList: File[] = Array.from(files);
+    const fileList = Array.from(files);
     fileList.forEach((file: File) => {
       const reader = new FileReader();
       reader.onload = (event) => {
@@ -520,7 +563,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
             height: processedCanvas.height,
           };
 
-          onCapturePage(newPage, false);
+          setReviewingPage(newPage);
         };
         img.src = dataUrl;
       };
@@ -532,6 +575,11 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
 
   return (
     <div className="fixed inset-0 z-40 flex flex-col bg-black text-white select-none h-screen-dvh min-h-screen-dvh w-full overflow-hidden">
+      {/* Visual Shutter Flash Effect */}
+      {isFlashing && (
+        <div className="absolute inset-0 z-50 bg-white opacity-80 pointer-events-none transition-opacity duration-150" />
+      )}
+
       {/* Top Header Bar with Safe Area */}
       <div className="relative z-50 flex items-center justify-between px-4 pt-safe pb-2 bg-gradient-to-b from-black/90 via-black/50 to-transparent">
         {/* Back / Close Button */}
@@ -550,7 +598,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           {steadyCounter > 0 ? (
             <div className="flex items-center gap-1.5 text-emerald-400 font-semibold truncate">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
-              <span className="truncate">Đang chụp ({Math.min(100, Math.round((steadyCounter / 7) * 100))}%)...</span>
+              <span className="truncate">Đang chụp ({Math.min(100, Math.round((steadyCounter / 9) * 100))}%)...</span>
             </div>
           ) : (
             <div className="flex items-center gap-1.5 truncate">
@@ -723,7 +771,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         <button
           id="btn-shutter"
           onClick={() => captureFrame()}
-          disabled={isCapturing}
+          disabled={isCapturing || !!reviewingPage}
           className="relative group p-2 active:scale-90 transition transform"
           title="Bấm để chụp ảnh thủ công"
         >
@@ -750,23 +798,156 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         <button
           id="btn-finish-scanning"
           onClick={onFinishedScanning}
-          disabled={scannedPagesCount === 0}
+          disabled={scannedPagesCount === 0 && !reviewingPage}
           className={`min-w-[48px] flex flex-col items-center gap-1 p-2 rounded-xl transition active:scale-95 ${
-            scannedPagesCount > 0 ? "text-blue-400 hover:text-blue-300" : "text-slate-600 opacity-40"
+            scannedPagesCount > 0 || reviewingPage ? "text-blue-400 hover:text-blue-300" : "text-slate-600 opacity-40"
           }`}
           title="Hoàn tất và xử lý tài liệu"
         >
           <div className="relative p-3 rounded-full bg-slate-900 border border-slate-800 shadow-sm">
             <Check className="w-6 h-6" />
-            {scannedPagesCount > 0 && (
+            {(scannedPagesCount > 0 || reviewingPage) && (
               <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-blue-600 text-white text-[11px] font-bold flex items-center justify-center shadow">
-                {scannedPagesCount}
+                {scannedPagesCount + (reviewingPage ? 1 : 0)}
               </span>
             )}
           </div>
           <span className="text-[11px] font-medium">Đã xong</span>
         </button>
       </div>
+
+      {/* JUMPING PAGE REVIEW SHEET OVERLAY */}
+      <AnimatePresence>
+        {reviewingPage && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex flex-col justify-end bg-black/80 backdrop-blur-sm"
+          >
+            {/* Flying / Jumping Card Container */}
+            <motion.div
+              initial={{ y: "100%", scale: 0.85 }}
+              animate={{ y: 0, scale: 1 }}
+              exit={{ y: "100%", scale: 0.9 }}
+              transition={{ type: "spring", stiffness: 320, damping: 28 }}
+              className="w-full max-w-lg mx-auto bg-slate-900 border-t border-slate-800 rounded-t-3xl p-5 shadow-2xl flex flex-col gap-4 pb-safe"
+            >
+              {/* Header Status Badge */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center border border-emerald-500/30">
+                    <Check className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                      {mode === "cccd"
+                        ? cardSide === "front"
+                          ? "Đã chụp Mặt trước CCCD"
+                          : "Đã chụp Mặt sau CCCD"
+                        : mode === "driver_license"
+                        ? cardSide === "front"
+                          ? "Đã chụp Mặt trước GPLX"
+                          : "Đã chụp Mặt sau GPLX"
+                        : `Đã quét Trang ${scannedPagesCount + 1}`}
+                    </h3>
+                    <p className="text-xs text-slate-400">Kiểm tra độ thẳng và rõ nét của trang</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    id="btn-review-adjust-crop"
+                    onClick={() => setIsAdjustingCrop(true)}
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-blue-400 border border-slate-700 transition active:scale-95"
+                    title="Chỉnh lại 4 góc"
+                  >
+                    <Crop className="w-3.5 h-3.5" />
+                    <span>Chỉnh 4 góc</span>
+                  </button>
+                  <button
+                    id="btn-review-retake"
+                    onClick={handleRetakeCurrentPage}
+                    className="p-2 rounded-lg bg-slate-800 hover:bg-rose-950 text-slate-400 hover:text-rose-400 border border-slate-700 transition active:scale-95"
+                    title="Chụp lại trang này"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Scanned Document Thumbnail Preview */}
+              <div className="relative w-full aspect-[4/3] max-h-[220px] bg-slate-950 rounded-2xl overflow-hidden border border-slate-800 flex items-center justify-center shadow-inner">
+                <img
+                  src={reviewingPage.processedImage}
+                  alt="Scanned Preview"
+                  className="max-h-full max-w-full object-contain rounded-lg shadow-md"
+                />
+                <div className="absolute top-2 left-2 px-2.5 py-1 rounded-md bg-black/70 backdrop-blur text-[11px] font-medium text-emerald-400 border border-emerald-500/20">
+                  Tự động căn phẳng & làm nét ✓
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center gap-3 pt-1">
+                {mode === "cccd" || mode === "driver_license" ? (
+                  cardSide === "front" ? (
+                    <button
+                      id="btn-review-next-side"
+                      onClick={() => handleConfirmReviewPage(false)}
+                      className="flex-1 flex items-center justify-center gap-2 py-3.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm shadow-lg shadow-blue-600/30 active:scale-95 transition"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                      <span>Lật sang Mặt sau & Quét tiếp</span>
+                    </button>
+                  ) : (
+                    <button
+                      id="btn-review-complete-card"
+                      onClick={() => handleConfirmReviewPage(true)}
+                      className="flex-1 flex items-center justify-center gap-2 py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm shadow-lg shadow-emerald-600/30 active:scale-95 transition"
+                    >
+                      <Check className="w-5 h-5" />
+                      <span>Hoàn tất & Ghép 2 mặt thẻ A4</span>
+                    </button>
+                  )
+                ) : (
+                  <>
+                    <button
+                      id="btn-review-scan-next"
+                      onClick={() => handleConfirmReviewPage(false)}
+                      className="flex-1 flex items-center justify-center gap-2 py-3.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm shadow-lg shadow-blue-600/30 active:scale-95 transition"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>Quét trang tiếp theo</span>
+                    </button>
+                    <button
+                      id="btn-review-finish-doc"
+                      onClick={() => handleConfirmReviewPage(true)}
+                      className="flex-1 flex items-center justify-center gap-2 py-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-sm border border-slate-700 active:scale-95 transition"
+                    >
+                      <Check className="w-4 h-4 text-emerald-400" />
+                      <span>Lưu ({scannedPagesCount + 1} trang)</span>
+                    </button>
+                  </>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* In-place Crop Adjuster Modal */}
+      {isAdjustingCrop && reviewingPage && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-black">
+          <CropAdjuster
+            imageSrc={reviewingPage.originalImage}
+            initialQuad={reviewingPage.quad}
+            aspectMode={mode === "cccd" || mode === "driver_license" ? "card" : "document"}
+            onComplete={handleCropAdjustComplete}
+            onCancel={() => setIsAdjustingCrop(false)}
+          />
+        </div>
+      )}
     </div>
   );
 };
