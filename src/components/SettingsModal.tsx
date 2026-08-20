@@ -171,10 +171,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onClearAl
         </div>
 
         {/* Footer Info */}
-        <div className="text-center text-xs text-slate-500 py-2">
-          <p className="font-semibold text-slate-400">VietScanPDF • Phiên bản 1.0 (PWA Ready)</p>
-          <p className="text-[11px] mt-1">
-            Ứng dụng độc lập phục vụ nhu cầu scan tài liệu hành chính, CCCD & bằng lái xe chuẩn A4.
+        <div className="text-center text-xs text-slate-400 py-4 px-2 space-y-2 border-t border-slate-850">
+          <p className="font-bold text-white text-sm">
+            VietScanPDF by Ltd (Dieplt.dongtien@gmail.com)
+          </p>
+          <p className="text-xs text-slate-300 leading-relaxed max-w-lg mx-auto">
+            Ứng dụng độc lập phục vụ scan và số hóa tài liệu hành chính, CCCD và Giấy phép lái xe theo chuẩn khổ A4.
+          </p>
+          <p className="text-xs text-slate-400 leading-relaxed max-w-lg mx-auto">
+            Ứng dụng hỗ trợ người dân số hóa giấy tờ nhanh chóng, thuận tiện, phục vụ thực hiện thủ tục hành chính và góp phần thúc đẩy “Bình dân học vụ số”.
           </p>
         </div>
       </div>

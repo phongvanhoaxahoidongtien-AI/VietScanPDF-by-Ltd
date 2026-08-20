@@ -12,6 +12,9 @@ import { SettingsModal } from "./components/SettingsModal";
 import { PDFPreviewModal } from "./components/PDFPreviewModal";
 import { LongImageModal } from "./components/LongImageModal";
 import { OCRViewerModal } from "./components/OCRViewerModal";
+import { PDFMergeModal } from "./components/PDFMergeModal";
+import { PDFSplitModal } from "./components/PDFSplitModal";
+import { PDFHighlightModal } from "./components/PDFHighlightModal";
 
 export default function App() {
   // Navigation & View States
@@ -27,6 +30,11 @@ export default function App() {
   const [isPDFPreviewOpen, setIsPDFPreviewOpen] = useState<boolean>(false);
   const [isLongImageOpen, setIsLongImageOpen] = useState<boolean>(false);
   const [activeOCRPage, setActiveOCRPage] = useState<ScannedPage | null>(null);
+
+  // PDF Tools Modals
+  const [isPDFMergeOpen, setIsPDFMergeOpen] = useState<boolean>(false);
+  const [isPDFSplitOpen, setIsPDFSplitOpen] = useState<boolean>(false);
+  const [isPDFHighlightOpen, setIsPDFHighlightOpen] = useState<boolean>(false);
 
   const hiddenFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -47,7 +55,7 @@ export default function App() {
   const handleStartScan = (mode: ScanMode = "document") => {
     setScanMode(mode);
 
-    // Standardized title format: ViietScan_by_Ltd_tai_lieu_DD_MM_YY
+    // Standardized title format
     const defaultTitle = generateDefaultDocumentTitle();
 
     const newDoc: ScannedDocument = {
@@ -214,6 +222,9 @@ export default function App() {
             <HomeScreen
               onStartScan={handleStartScan}
               onImportPhotos={handleImportPhotosFromHome}
+              onOpenPDFMerge={() => setIsPDFMergeOpen(true)}
+              onOpenPDFSplit={() => setIsPDFSplitOpen(true)}
+              onOpenPDFHighlight={() => setIsPDFHighlightOpen(true)}
               recentDocuments={allDocuments}
               onSelectDocument={(doc) => setActiveDocument(doc)}
               onViewAllDocuments={() => setActiveTab("documents")}
@@ -267,6 +278,19 @@ export default function App() {
           category={activeDocument?.category}
           onClose={() => setActiveOCRPage(null)}
         />
+      )}
+
+      {/* PDF Tools Modals */}
+      {isPDFMergeOpen && (
+        <PDFMergeModal onClose={() => setIsPDFMergeOpen(false)} />
+      )}
+
+      {isPDFSplitOpen && (
+        <PDFSplitModal onClose={() => setIsPDFSplitOpen(false)} />
+      )}
+
+      {isPDFHighlightOpen && (
+        <PDFHighlightModal onClose={() => setIsPDFHighlightOpen(false)} />
       )}
     </div>
   );

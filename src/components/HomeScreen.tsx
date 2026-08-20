@@ -8,16 +8,20 @@ import {
   Image as ImageIcon,
   Sparkles,
   Upload,
-  ArrowRight,
   Shield,
   Layers,
   ChevronRight,
+  Scissors,
+  Highlighter,
 } from "lucide-react";
 import { ScanMode, ScannedDocument } from "../types";
 
 interface HomeScreenProps {
   onStartScan: (mode: ScanMode) => void;
   onImportPhotos: () => void;
+  onOpenPDFMerge: () => void;
+  onOpenPDFSplit: () => void;
+  onOpenPDFHighlight: () => void;
   recentDocuments: ScannedDocument[];
   onSelectDocument: (doc: ScannedDocument) => void;
   onViewAllDocuments: () => void;
@@ -26,6 +30,9 @@ interface HomeScreenProps {
 export const HomeScreen: React.FC<HomeScreenProps> = ({
   onStartScan,
   onImportPhotos,
+  onOpenPDFMerge,
+  onOpenPDFSplit,
+  onOpenPDFHighlight,
   recentDocuments,
   onSelectDocument,
   onViewAllDocuments,
@@ -133,6 +140,60 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             </div>
             <h4 className="text-sm font-bold text-white group-hover:text-amber-400 transition">Nhập Ảnh</h4>
             <p className="text-[11px] text-slate-400 mt-0.5">Xử lý ảnh có sẵn trong máy</p>
+          </button>
+        </div>
+      </div>
+
+      {/* PDF Tools Section */}
+      <div className="mb-6">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">PDF Tools</h3>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {/* Merge PDF */}
+          <button
+            id="btn-tool-merge-pdf"
+            onClick={onOpenPDFMerge}
+            className="flex items-center gap-3.5 p-4 rounded-2xl bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-blue-500/40 active:scale-[0.98] transition text-left group shadow-sm"
+          >
+            <div className="p-3 rounded-xl bg-blue-500/10 text-blue-400 group-hover:bg-blue-600 group-hover:text-white transition shrink-0">
+              <Layers className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <h4 className="text-sm font-bold text-white group-hover:text-blue-400 transition">Merge PDF</h4>
+              <p className="text-[11px] text-slate-400 mt-0.5">Ghép nhiều file PDF thành 1</p>
+            </div>
+          </button>
+
+          {/* Split PDF */}
+          <button
+            id="btn-tool-split-pdf"
+            onClick={onOpenPDFSplit}
+            className="flex items-center gap-3.5 p-4 rounded-2xl bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-emerald-500/40 active:scale-[0.98] transition text-left group shadow-sm"
+          >
+            <div className="p-3 rounded-xl bg-emerald-500/10 text-emerald-400 group-hover:bg-emerald-600 group-hover:text-white transition shrink-0">
+              <Scissors className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <h4 className="text-sm font-bold text-white group-hover:text-emerald-400 transition">Split PDF</h4>
+              <p className="text-[11px] text-slate-400 mt-0.5">Tách trang lẻ & khoảng trang</p>
+            </div>
+          </button>
+
+          {/* Highlight PDF */}
+          <button
+            id="btn-tool-highlight-pdf"
+            onClick={onOpenPDFHighlight}
+            className="flex items-center gap-3.5 p-4 rounded-2xl bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-amber-500/40 active:scale-[0.98] transition text-left group shadow-sm"
+          >
+            <div className="p-3 rounded-xl bg-amber-500/10 text-amber-400 group-hover:bg-amber-600 group-hover:text-white transition shrink-0">
+              <Highlighter className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <h4 className="text-sm font-bold text-white group-hover:text-amber-400 transition">Highlight PDF</h4>
+              <p className="text-[11px] text-slate-400 mt-0.5">Bôi vàng văn bản trực quan</p>
+            </div>
           </button>
         </div>
       </div>

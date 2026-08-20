@@ -14,10 +14,12 @@ import {
   Check,
   Type,
   Maximize2,
+  Move,
 } from "lucide-react";
 import { FilterMode, ScannedDocument, ScannedPage, QuadPoints } from "../types";
 import { CVEngine } from "../utils/cvEngine";
 import { CropAdjuster } from "./CropAdjuster";
+import { PageReorderModal } from "./PageReorderModal";
 
 interface PageEditorProps {
   document: ScannedDocument;
@@ -40,6 +42,7 @@ export const PageEditor: React.FC<PageEditorProps> = ({
 }) => {
   const [currentPageIndex, setCurrentPageIndex] = useState<number>(0);
   const [isCropping, setIsCropping] = useState<boolean>(false);
+  const [isReordering, setIsReordering] = useState<boolean>(false);
   const [isApplyingFilter, setIsApplyingFilter] = useState<boolean>(false);
 
   const activePage = doc.pages[currentPageIndex] || doc.pages[0];
@@ -309,6 +312,17 @@ export const PageEditor: React.FC<PageEditorProps> = ({
 
         {doc.pages.length > 1 && (
           <button
+            id="btn-tool-reorder"
+            onClick={() => setIsReordering(true)}
+            className="min-h-[44px] flex flex-col items-center justify-center gap-1 p-2 rounded-lg text-slate-300 hover:text-white active:scale-95 transition"
+          >
+            <Move className="w-5 h-5 text-blue-400" />
+            <span className="text-[10px] font-medium">Đổi thứ tự</span>
+          </button>
+        )}
+
+        {doc.pages.length > 1 && (
+          <button
             id="btn-tool-longimage"
             onClick={onOpenLongImage}
             className="min-h-[44px] flex flex-col items-center justify-center gap-1 p-2 rounded-lg text-slate-300 hover:text-white active:scale-95 transition"
@@ -362,6 +376,23 @@ export const PageEditor: React.FC<PageEditorProps> = ({
           <span className="text-[9px] font-semibold">Thêm</span>
         </button>
       </div>
+
+      {/* Page Reorder Modal */}
+      {isReordering && (
+        <PageReorderModal
+          document={doc}
+          onSaveReorder={(reorderedPages) => {
+            onUpdateDocument({
+              ...doc,
+              pages: reorderedPages,
+              thumbnail: reorderedPages[0]?.processedImage || "",
+              updatedAt: Date.now(),
+            });
+            setCurrentPageIndex(0);
+          }}
+          onClose={() => setIsReordering(false)}
+        />
+      )}
     </div>
   );
 };
