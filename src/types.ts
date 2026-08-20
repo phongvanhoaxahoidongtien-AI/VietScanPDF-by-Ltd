@@ -14,6 +14,40 @@ export interface QuadPoints {
   bottomLeft: Point;
 }
 
+export interface DocumentQualityCheck {
+  sharpness: number; // 0 to 100 (Laplacian variance)
+  brightness: number; // 0 to 255 (average luma)
+  glarePercent: number; // 0 to 100 (% of saturated pixels)
+  sizeRatio: number; // 0 to 1.0 (quad area / frame area)
+  skewScore: number; // 0 to 100 (perspective orthogonality)
+  isSharp: boolean;
+  isWellExposed: boolean;
+  hasNoGlare: boolean;
+  isGoodSize: boolean;
+  isWellAligned: boolean;
+  isReadyForCapture: boolean;
+  guidanceCode?:
+    | "TOO_SMALL"
+    | "TOO_LARGE"
+    | "TOO_SKEWED"
+    | "TOO_BLURRY"
+    | "TOO_DARK"
+    | "GLARE"
+    | "HOLD_STEADY"
+    | "WRONG_SIDE"
+    | "READY";
+  guidanceText: string;
+}
+
+export interface CardSideAnalysis {
+  predictedSide: "front" | "back" | "unknown";
+  frontConfidence: number; // 0 to 1
+  backConfidence: number;  // 0 to 1
+  hasPhotoOrEmblem: boolean;
+  hasMRZOrChip: boolean;
+  perceptualHash?: string;
+}
+
 export interface ScannedPage {
   id: string;
   originalImage: string; // Base64 data URL of raw capture
@@ -26,6 +60,8 @@ export interface ScannedPage {
   createdAt: number;
   width: number;
   height: number;
+  perceptualHash?: string;
+  detectedSide?: "front" | "back";
 }
 
 export interface ScannedDocument {
@@ -59,6 +95,8 @@ export interface CameraQualityMetrics {
   canAutoCapture: boolean;
   confidence?: number;
   stabilityScore?: number;
+  quality?: DocumentQualityCheck;
+  cardSide?: CardSideAnalysis;
 }
 
 export interface DocumentTrackingState {
@@ -70,6 +108,8 @@ export interface DocumentTrackingState {
   stableFrames: number;
   isReadyForCapture: boolean;
   guidance: string;
+  quality?: DocumentQualityCheck;
+  cardSide?: CardSideAnalysis;
 }
 
 export interface PDFExportOptions {

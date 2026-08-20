@@ -1,9 +1,19 @@
-import { FilterMode, Point, QuadPoints } from "../types";
+import {
+  FilterMode,
+  Point,
+  QuadPoints,
+  DocumentQualityCheck,
+  CardSideAnalysis,
+} from "../types";
 import { DocumentTracker } from "./documentTracker";
 
 /**
- * Computer Vision & Image Processing Engine for VietScanPDF
- * Runs 100% locally on Client Canvas / Web Worker (0 latency, 100% private)
+ * Computer Vision & Image Processing Engine for VietScan
+ * Multi-stage Document Detection, Sub-pixel Line Intersection Corner Refinement,
+ * Adaptive Thresholding, Blur/Glare/Exposure Quality Gating, CCCD Front/Back Classification,
+ * and Perceptual Hashing Anti-Duplicate System.
+ *
+ * Runs 100% locally on Client Canvas / Web Worker (0 latency, 100% private).
  */
 
 export interface DetectedQuadResult {
@@ -12,22 +22,13 @@ export interface DetectedQuadResult {
   isClear: boolean;
   isRealQuad: boolean;
   score: number;
+  quality?: DocumentQualityCheck;
+  cardSide?: CardSideAnalysis;
 }
 
 export class CVEngine {
   /**
-   * Fast real-time edge & quadrilateral document boundary detection from video or canvas
-   * Pipeline:
-   * 1. Frame Downscaling & Normalization (for 60 FPS performance)
-   * 2. Grayscale & Noise Reduction (Gaussian blur)
-   * 3. Sobel Edge Gradient Magnitude & Adaptive Thresholding
-   * 4. Morphological Dilation/Closing (connect document boundary lines)
-   * 5. Topological Contour Extraction (Connected Component BFS)
-   * 6. Convex Hull & Polygon Simplification (Ramer-Douglas-Peucker)
-   * 7. Corner Refinement via Boundary Segment Line Intersections
-   * 8. Geometric Validation (convexity, non-self-intersection, angles, area ratio)
-   * 9. Multi-Factor Candidate Scoring (Area + Orthogonality + Parallelism + Edge Gradient)
-   * 10. Deterministic Corner Ordering (TopLeft, TopRight, BottomRight, BottomLeft)
+   * STAGE 1 & 2: Multi-Stage Document & Card Detection with Adaptive Edge Analysis
    */
   static detectDocumentQuad(
     sourceCanvas: HTMLCanvasElement | HTMLVideoElement | CanvasImageSource,
@@ -45,8 +46,8 @@ export class CVEngine {
       };
     }
 
-    // Process on a downscaled canvas (approx. 280-320px width) for ultra-fast execution (<6ms per frame)
-    const targetWorkWidth = 300;
+    // Process on a downscaled canvas (320px width) for real-time 60fps execution (<5ms per frame)
+    const targetWorkWidth = 320;
     const scale = Math.min(1, targetWorkWidth / srcWidth);
     const workW = Math.max(80, Math.round(srcWidth * scale));
     const workH = Math.max(60, Math.round(srcHeight * scale));
@@ -70,7 +71,7 @@ export class CVEngine {
     const imgData = ctx.getImageData(0, 0, workW, workH);
     const data = imgData.data;
 
-    // 1. Grayscale conversion & Luma distribution analysis
+    // 1. Grayscale & Luma distribution statistics
     const gray = new Uint8Array(workW * workH);
     let totalLuma = 0;
     let minLuma = 255;
@@ -86,14 +87,13 @@ export class CVEngine {
     const avgLuma = totalLuma / (workW * workH);
     const lumaRange = Math.max(20, maxLuma - minLuma);
 
-    // 2. 3x3 Gaussian Blur to remove paper print noise & fine text lines
+    // 2. 3x3 Gaussian Blur to remove paper texture and ink grain
     const blurred = new Uint8Array(workW * workH);
     for (let y = 1; y < workH - 1; y++) {
       const rowPrev = (y - 1) * workW;
       const rowCurr = y * workW;
       const rowNext = (y + 1) * workW;
       for (let x = 1; x < workW - 1; x++) {
-        // [1 2 1; 2 4 2; 1 2 1] / 16
         const val =
           (gray[rowPrev + x - 1] +
             gray[rowPrev + x] * 2 +
@@ -109,16 +109,38 @@ export class CVEngine {
       }
     }
 
-    // 3. Sobel Gradient Magnitude & Multi-Threshold Edge Extraction
+    // 3. Dual Edge Detection: Combined Directional Sobel Gradient & Local Adaptive Threshold
     const edges = new Uint8Array(workW * workH);
     const gradMagnitudes = new Uint8Array(workW * workH);
-    const edgeThreshold = Math.max(18, Math.min(48, lumaRange * 0.22));
+    const edgeThreshold = Math.max(16, Math.min(46, lumaRange * 0.20));
+
+    // Compute integral image for fast local adaptive thresholding
+    const integral = new Int32Array((workW + 1) * (workH + 1));
+    for (let y = 0; y < workH; y++) {
+      let sum = 0;
+      const intRowCurr = (y + 1) * (workW + 1);
+      const intRowPrev = y * (workW + 1);
+      const grayRow = y * workW;
+      for (let x = 0; x < workW; x++) {
+        sum += blurred[grayRow + x];
+        integral[intRowCurr + x + 1] = integral[intRowPrev + x + 1] + sum;
+      }
+    }
+
+    // Adaptive window radius (around 1/16th of frame width)
+    const sRadius = Math.max(4, Math.round(workW / 18));
+    const adaptC = 7;
 
     for (let y = 1; y < workH - 1; y++) {
       const rowPrev = (y - 1) * workW;
       const rowCurr = y * workW;
       const rowNext = (y + 1) * workW;
+
+      const y0 = Math.max(0, y - sRadius);
+      const y1 = Math.min(workH - 1, y + sRadius);
+
       for (let x = 1; x < workW - 1; x++) {
+        // Sobel Gradient
         const gx =
           blurred[rowPrev + x + 1] +
           2 * blurred[rowCurr + x + 1] +
@@ -133,13 +155,27 @@ export class CVEngine {
 
         const mag = (Math.abs(gx) + Math.abs(gy)) >> 2;
         gradMagnitudes[rowCurr + x] = mag;
-        if (mag > edgeThreshold) {
+
+        // Local Adaptive Threshold Check
+        const x0 = Math.max(0, x - sRadius);
+        const x1 = Math.min(workW - 1, x + sRadius);
+        const area = (x1 - x0 + 1) * (y1 - y0 + 1);
+        const localSum =
+          integral[(y1 + 1) * (workW + 1) + (x1 + 1)] -
+          integral[y0 * (workW + 1) + (x1 + 1)] -
+          integral[(y1 + 1) * (workW + 1) + x0] +
+          integral[y0 * (workW + 1) + x0];
+        const localMean = localSum / area;
+
+        const isAdaptiveEdge = blurred[rowCurr + x] < localMean - adaptC && mag > 10;
+
+        if (mag > edgeThreshold || isAdaptiveEdge) {
           edges[rowCurr + x] = 255;
         }
       }
     }
 
-    // 4. Morphological Dilation / Bridge to connect broken document boundary segments
+    // 4. Directional Morphological Closing to bridge faint document borders
     const dilatedEdges = new Uint8Array(workW * workH);
     for (let y = 1; y < workH - 1; y++) {
       for (let x = 1; x < workW - 1; x++) {
@@ -149,17 +185,19 @@ export class CVEngine {
           edges[idx - 1] === 255 ||
           edges[idx + 1] === 255 ||
           edges[idx - workW] === 255 ||
-          edges[idx + workW] === 255
+          edges[idx + workW] === 255 ||
+          edges[idx - workW - 1] === 255 ||
+          edges[idx + workW + 1] === 255
         ) {
           dilatedEdges[idx] = 255;
         }
       }
     }
 
-    // 5. Find connected boundary contours using 8-connectivity BFS
+    // 5. Connected Component BFS Contour Extraction
     const visited = new Uint8Array(workW * workH);
     const contours: Point[][] = [];
-    const minContourPoints = 25;
+    const minContourPoints = 20;
 
     const marginX = Math.round(workW * 0.02);
     const marginY = Math.round(workH * 0.02);
@@ -172,7 +210,7 @@ export class CVEngine {
           const queue: number[] = [idx];
           visited[idx] = 1;
 
-          while (queue.length > 0 && contour.length < 1500) {
+          while (queue.length > 0 && contour.length < 1800) {
             const currIdx = queue.pop()!;
             const cx = currIdx % workW;
             const cy = Math.floor(currIdx / workW);
@@ -209,7 +247,7 @@ export class CVEngine {
       }
     }
 
-    // 6. Evaluate candidate contours with Multi-Factor Scoring & Line-Intersection Refinement
+    // 6. Multi-Factor Candidate Scoring & Sub-Pixel Line-Intersection Refinement
     let bestQuad: QuadPoints | null = null;
     let bestScore = 0;
     const totalArea = workW * workH;
@@ -221,64 +259,96 @@ export class CVEngine {
       const hullArea = this.polygonArea(hull);
       const areaRatio = hullArea / totalArea;
 
-      // Document must take between 10% and 94% of camera frame
-      if (areaRatio < 0.10 || areaRatio > 0.94) continue;
+      // Filter contours by plausible document area ratio (12% to 94%)
+      if (areaRatio < 0.12 || areaRatio > 0.94) continue;
 
-      // Simplify polygon with RDP
       const perimeter = this.polygonPerimeter(hull);
-      const epsilon = Math.max(1.8, perimeter * 0.032);
-      const approx = this.ramerDouglasPeucker(hull, epsilon);
 
-      let quadCandidate: Point[] | null = null;
+      // Try multiple RDP approximation tolerances to find cleanest polygon
+      const epsilons = [perimeter * 0.025, perimeter * 0.038, perimeter * 0.052];
+      let candidatePts: Point[] | null = null;
 
-      if (approx.length === 4) {
-        quadCandidate = approx;
-      } else if (approx.length >= 5 && approx.length <= 9) {
-        quadCandidate = this.reduceTo4Corners(approx);
-      } else {
-        quadCandidate = this.extractExtremeCorners(hull);
+      for (const eps of epsilons) {
+        const approx = this.ramerDouglasPeucker(hull, Math.max(1.8, eps));
+        if (approx.length === 4) {
+          candidatePts = approx;
+          break;
+        } else if (approx.length >= 5 && approx.length <= 8 && !candidatePts) {
+          candidatePts = this.reduceTo4Corners(approx);
+        }
       }
 
-      if (quadCandidate && quadCandidate.length === 4) {
-        // Refine corners via segment edge gradient alignment
-        const refinedQuad = this.refineCornerPrecision(quadCandidate, gradMagnitudes, workW, workH);
-        const sortedQuad = this.orderQuadPoints(refinedQuad);
+      if (!candidatePts) {
+        candidatePts = this.extractExtremeCorners(hull);
+      }
+
+      if (candidatePts && candidatePts.length === 4) {
+        // High-Precision Corner Refinement via Sub-Pixel Line Intersections
+        const rawOrdered = this.orderQuadPoints(candidatePts);
+        const refinedQuad = this.refineCornersByLineFitting(rawOrdered, gradMagnitudes, workW, workH);
+        const sortedQuad = this.orderQuadPoints([
+          refinedQuad.topLeft,
+          refinedQuad.topRight,
+          refinedQuad.bottomRight,
+          refinedQuad.bottomLeft,
+        ]);
 
         if (this.isValidConvexQuad(sortedQuad, workW, workH)) {
-          // Compute Multi-Factor Score:
-          // 1. Area Ratio Score (optimal is 25% - 85%)
           const qArea = this.quadArea(sortedQuad);
           const qAreaRatio = qArea / totalArea;
-          const areaScore = Math.min(1, qAreaRatio / 0.60);
 
-          // 2. Orthogonality Score (angles close to 90°)
+          // 1. Area Score (Optimal is 25% - 82%)
+          const areaScore =
+            qAreaRatio >= 0.25 && qAreaRatio <= 0.82
+              ? 1.0
+              : qAreaRatio < 0.25
+              ? Math.max(0, qAreaRatio / 0.25)
+              : Math.max(0, 1 - (qAreaRatio - 0.82) * 4);
+
+          // 2. Orthogonality Score (Angles close to 90°)
           const orthoScore = this.calculateOrthogonalityScore(sortedQuad);
 
-          // 3. Parallelism Score (opposite edges close in length & direction)
+          // 3. Parallelism Score
           const parallelScore = this.calculateParallelismScore(sortedQuad);
 
-          // 4. Edge Gradient Quality Score along the 4 quadrilateral lines
+          // 4. Edge Gradient Energy along the 4 quadrilateral lines
           const edgeScore = this.evaluateEdgeGradientQuality(sortedQuad, gradMagnitudes, workW, workH);
 
-          // 5. Aspect Ratio Score
-          const wTop = Math.hypot(sortedQuad.topRight.x - sortedQuad.topLeft.x, sortedQuad.topRight.y - sortedQuad.topLeft.y);
-          const wBot = Math.hypot(sortedQuad.bottomRight.x - sortedQuad.bottomLeft.x, sortedQuad.bottomRight.y - sortedQuad.bottomLeft.y);
-          const hLeft = Math.hypot(sortedQuad.bottomLeft.x - sortedQuad.topLeft.x, sortedQuad.bottomLeft.y - sortedQuad.topLeft.y);
-          const hRight = Math.hypot(sortedQuad.bottomRight.x - sortedQuad.topRight.x, sortedQuad.bottomRight.y - sortedQuad.topRight.y);
+          // 5. Foreground vs Background Border Contrast
+          const contrastScore = this.evaluateBorderContrast(sortedQuad, blurred, workW, workH);
+
+          // 6. Aspect Ratio Score
+          const wTop = Math.hypot(
+            sortedQuad.topRight.x - sortedQuad.topLeft.x,
+            sortedQuad.topRight.y - sortedQuad.topLeft.y
+          );
+          const wBot = Math.hypot(
+            sortedQuad.bottomRight.x - sortedQuad.bottomLeft.x,
+            sortedQuad.bottomRight.y - sortedQuad.bottomLeft.y
+          );
+          const hLeft = Math.hypot(
+            sortedQuad.bottomLeft.x - sortedQuad.topLeft.x,
+            sortedQuad.bottomLeft.y - sortedQuad.topLeft.y
+          );
+          const hRight = Math.hypot(
+            sortedQuad.bottomRight.x - sortedQuad.topRight.x,
+            sortedQuad.bottomRight.y - sortedQuad.topRight.y
+          );
           const avgW = (wTop + wBot) / 2;
           const avgH = (hLeft + hRight) / 2;
           const aspect = Math.max(avgW, avgH) / Math.max(1, Math.min(avgW, avgH));
           const targetRatio = targetAspect === "card" ? 1.586 : 1.414;
           const aspectDiff = Math.abs(aspect - targetRatio);
-          const aspectScore = Math.max(0, 1 - aspectDiff * 0.65);
+          const aspectScore = Math.max(0, 1 - aspectDiff * 0.7);
 
-          // Weighted composite candidate score
+          // Composite Weighted Candidate Score
           const compositeScore =
-            areaScore * 0.25 +
-            orthoScore * 0.30 +
-            parallelScore * 0.20 +
-            edgeScore * 0.15 +
-            aspectScore * 0.10;
+            orthoScore * 0.25 +
+            edgeScore * 0.25 +
+            contrastScore * 0.20 +
+            parallelScore * 0.15 +
+            areaScore * 0.10 +
+            aspectScore * 0.05;
 
           if (compositeScore > bestScore) {
             bestScore = compositeScore;
@@ -288,18 +358,26 @@ export class CVEngine {
       }
     }
 
-    // 7. If no contour produced a valid quad, try Bright Document Region Bounding Quad
-    if (!bestQuad) {
+    // 7. Bright/Dark Background Threshold Fallback
+    if (!bestQuad || bestScore < 0.38) {
       const brightQuad = this.findBrightDocumentRegionQuad(blurred, workW, workH, avgLuma);
       if (brightQuad) {
-        bestQuad = brightQuad;
-        bestScore = 0.52;
+        const sortedBright = this.orderQuadPoints([
+          brightQuad.topLeft,
+          brightQuad.topRight,
+          brightQuad.bottomRight,
+          brightQuad.bottomLeft,
+        ]);
+        if (this.isValidConvexQuad(sortedBright, workW, workH)) {
+          bestQuad = sortedBright;
+          bestScore = Math.max(bestScore, 0.48);
+        }
       }
     }
 
-    // 8. Scale points back to original video/canvas coordinate space
+    // 8. Map coordinates back to full resolution
     const invScale = 1 / scale;
-    if (bestQuad && bestScore >= 0.38) {
+    if (bestQuad && bestScore >= 0.36) {
       const fullQuad: QuadPoints = {
         topLeft: {
           x: Math.max(0, Math.min(srcWidth, Math.round(bestQuad.topLeft.x * invScale))),
@@ -326,59 +404,589 @@ export class CVEngine {
         fullQuad.bottomLeft,
       ]);
 
-      const confidence = Math.min(0.98, Math.max(0.45, bestScore));
+      const confidence = Math.min(0.98, Math.max(0.40, bestScore));
+
+      // Quality and Card Side Analysis
+      const quality = this.checkDocumentQuality(
+        sourceCanvas,
+        normalizedFullQuad,
+        srcWidth,
+        srcHeight,
+        targetAspect
+      );
+
+      let cardSide: CardSideAnalysis | undefined = undefined;
+      if (targetAspect === "card") {
+        cardSide = this.analyzeCardSide(sourceCanvas, normalizedFullQuad);
+      }
 
       return {
         quad: normalizedFullQuad,
         confidence,
-        isClear: true,
+        isClear: quality.isSharp && quality.isWellExposed && quality.hasNoGlare,
         isRealQuad: true,
         score: bestScore,
+        quality,
+        cardSide,
       };
     }
 
-    // Default fallback frame
+    // Fallback default quad
+    const defaultQuad = this.getDefaultQuad(srcWidth, srcHeight, targetAspect);
+    const defaultQuality = this.checkDocumentQuality(
+      sourceCanvas,
+      defaultQuad,
+      srcWidth,
+      srcHeight,
+      targetAspect
+    );
+
     return {
-      quad: this.getDefaultQuad(srcWidth, srcHeight, targetAspect),
-      confidence: 0.20,
+      quad: defaultQuad,
+      confidence: 0.18,
       isClear: false,
       isRealQuad: false,
       score: 0,
+      quality: defaultQuality,
     };
   }
 
   /**
-   * Refine 4 corner points to snap directly onto gradient peaks
+   * STAGE 3: Sub-Pixel Line Fitting & Intersection Corner Refinement
+   * For each of the 4 edges, samples normal search profiles to find gradient peaks,
+   * fits linear regression lines (L0, L1, L2, L3), and intersects them to find exact corners.
    */
-  private static refineCornerPrecision(
-    pts: Point[],
+  private static refineCornersByLineFitting(
+    q: QuadPoints,
     gradMag: Uint8Array,
     w: number,
     h: number
-  ): Point[] {
-    const searchRadius = 4;
-    return pts.map((p) => {
-      let maxGrad = -1;
-      let bestX = p.x;
-      let bestY = p.y;
+  ): QuadPoints {
+    const edges = [
+      { p1: q.topLeft, p2: q.topRight },       // Top
+      { p1: q.topRight, p2: q.bottomRight },   // Right
+      { p1: q.bottomRight, p2: q.bottomLeft }, // Bottom
+      { p1: q.bottomLeft, p2: q.topLeft },     // Left
+    ];
 
-      for (let dy = -searchRadius; dy <= searchRadius; dy++) {
-        for (let dx = -searchRadius; dx <= searchRadius; dx++) {
-          const nx = Math.round(p.x + dx);
-          const ny = Math.round(p.y + dy);
-          if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
-            const mag = gradMag[ny * w + nx];
+    const fittedLines: { a: number; b: number; c: number }[] = [];
+    const samplesPerEdge = 14;
+    const searchRadius = 7;
+
+    for (const edge of edges) {
+      const dx = edge.p2.x - edge.p1.x;
+      const dy = edge.p2.y - edge.p1.y;
+      const edgeLen = Math.hypot(dx, dy);
+      if (edgeLen === 0) {
+        fittedLines.push({ a: 0, b: 1, c: -edge.p1.y });
+        continue;
+      }
+
+      // Unit normal vector perpendicular to edge
+      const nx = -dy / edgeLen;
+      const ny = dx / edgeLen;
+
+      const edgePeaks: Point[] = [];
+
+      for (let s = 1; s <= samplesPerEdge; s++) {
+        const t = s / (samplesPerEdge + 1);
+        const bx = edge.p1.x + dx * t;
+        const by = edge.p1.y + dy * t;
+
+        let maxGrad = 0;
+        let bestOffset = 0;
+
+        for (let r = -searchRadius; r <= searchRadius; r++) {
+          const px = Math.round(bx + nx * r);
+          const py = Math.round(by + ny * r);
+          if (px >= 0 && px < w && py >= 0 && py < h) {
+            const mag = gradMag[py * w + px];
             if (mag > maxGrad) {
               maxGrad = mag;
-              bestX = nx;
-              bestY = ny;
+              bestOffset = r;
             }
           }
         }
+
+        if (maxGrad > 15) {
+          edgePeaks.push({
+            x: bx + nx * bestOffset,
+            y: by + ny * bestOffset,
+          });
+        }
       }
 
-      return { x: bestX, y: bestY };
-    });
+      // Fit 2D line: a*x + b*y + c = 0 using robust Linear Regression
+      if (edgePeaks.length >= 4) {
+        fittedLines.push(this.fitLine2D(edgePeaks));
+      } else {
+        // Fallback to original line segment
+        const a = dy;
+        const b = -dx;
+        const c = -(a * edge.p1.x + b * edge.p1.y);
+        fittedLines.push({ a, b, c });
+      }
+    }
+
+    // Intersect adjacent line pairs
+    const intersect = (
+      l1: { a: number; b: number; c: number },
+      l2: { a: number; b: number; c: number }
+    ): Point | null => {
+      const det = l1.a * l2.b - l2.a * l1.b;
+      if (Math.abs(det) < 1e-5) return null;
+      const x = (l1.b * l2.c - l2.b * l1.c) / det;
+      const y = (l2.a * l1.c - l1.a * l2.c) / det;
+      return { x, y };
+    };
+
+    const tl = intersect(fittedLines[3], fittedLines[0]) || q.topLeft;
+    const tr = intersect(fittedLines[0], fittedLines[1]) || q.topRight;
+    const br = intersect(fittedLines[1], fittedLines[2]) || q.bottomRight;
+    const bl = intersect(fittedLines[2], fittedLines[3]) || q.bottomLeft;
+
+    // Constrain refined corners to not deviate wildly from initial contour
+    const clampDist = (pt: Point, original: Point, maxDev: number): Point => {
+      const d = Math.hypot(pt.x - original.x, pt.y - original.y);
+      if (d > maxDev) {
+        const ratio = maxDev / d;
+        return {
+          x: original.x + (pt.x - original.x) * ratio,
+          y: original.y + (pt.y - original.y) * ratio,
+        };
+      }
+      return pt;
+    };
+
+    const maxDev = Math.min(w, h) * 0.08;
+    return {
+      topLeft: clampDist(tl, q.topLeft, maxDev),
+      topRight: clampDist(tr, q.topRight, maxDev),
+      bottomRight: clampDist(br, q.bottomRight, maxDev),
+      bottomLeft: clampDist(bl, q.bottomLeft, maxDev),
+    };
+  }
+
+  /**
+   * Fit 2D line a*x + b*y + c = 0 through points using Least Squares
+   */
+  private static fitLine2D(points: Point[]): { a: number; b: number; c: number } {
+    const n = points.length;
+    let mx = 0,
+      my = 0;
+    for (const p of points) {
+      mx += p.x;
+      my += p.y;
+    }
+    mx /= n;
+    my /= n;
+
+    let sxx = 0,
+      syy = 0,
+      sxy = 0;
+    for (const p of points) {
+      const dx = p.x - mx;
+      const dy = p.y - my;
+      sxx += dx * dx;
+      syy += dy * dy;
+      sxy += dx * dy;
+    }
+
+    if (Math.abs(sxy) < 1e-5) {
+      if (sxx > syy) {
+        return { a: 0, b: 1, c: -my };
+      } else {
+        return { a: 1, b: 0, c: -mx };
+      }
+    }
+
+    // Principal component angle
+    const angle = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+    const a = -Math.sin(angle);
+    const b = Math.cos(angle);
+    const c = -(a * mx + b * my);
+
+    return { a, b, c };
+  }
+
+  /**
+   * STAGE 4: Quality Checks (Blur, Glare, Brightness, Size, Skew)
+   */
+  static checkDocumentQuality(
+    sourceCanvas: HTMLCanvasElement | HTMLVideoElement | CanvasImageSource,
+    quad: QuadPoints,
+    frameW: number,
+    frameH: number,
+    mode: "document" | "card" = "document"
+  ): DocumentQualityCheck {
+    const totalFrameArea = frameW * frameH;
+    const qArea = this.quadArea(quad);
+    const sizeRatio = qArea / Math.max(1, totalFrameArea);
+
+    // 1. Skew / Orthogonality check
+    const orthoScore = this.calculateOrthogonalityScore(quad);
+    const skewScore = Math.round(orthoScore * 100);
+    const isWellAligned = orthoScore >= 0.65;
+
+    // 2. Size Check
+    const minSize = mode === "card" ? 0.16 : 0.20;
+    const isGoodSize = sizeRatio >= minSize && sizeRatio <= 0.88;
+
+    // Sample interior region on small preview canvas to evaluate Blur & Glare
+    const sampleW = 120;
+    const sampleH = 80;
+    const canvas = document.createElement("canvas");
+    canvas.width = sampleW;
+    canvas.height = sampleH;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+    if (!ctx) {
+      return {
+        sharpness: 75,
+        brightness: 130,
+        glarePercent: 0,
+        sizeRatio,
+        skewScore,
+        isSharp: true,
+        isWellExposed: true,
+        hasNoGlare: true,
+        isGoodSize,
+        isWellAligned,
+        isReadyForCapture: isGoodSize && isWellAligned,
+        guidanceCode: isGoodSize ? "READY" : "TOO_SMALL",
+        guidanceText: isGoodSize ? "Đang chụp..." : "Đưa điện thoại gần tài liệu hơn",
+      };
+    }
+
+    // Warp sample interior
+    const warped = this.warpPerspective(sourceCanvas as any, quad, sampleW, sampleH);
+    ctx.drawImage(warped, 0, 0, sampleW, sampleH);
+    const imgData = ctx.getImageData(0, 0, sampleW, sampleH);
+    const data = imgData.data;
+
+    let totalLuma = 0;
+    let glareCount = 0;
+    const gray = new Uint8Array(sampleW * sampleH);
+
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const luma = (r * 77 + g * 150 + b * 29) >> 8;
+      gray[i / 4] = luma;
+      totalLuma += luma;
+
+      // Glare detection: Near maximum saturation white
+      if (luma > 248 && Math.abs(r - g) < 12 && Math.abs(g - b) < 12) {
+        glareCount++;
+      }
+    }
+
+    const brightness = Math.round(totalLuma / (sampleW * sampleH));
+    const glarePercent = (glareCount / (sampleW * sampleH)) * 100;
+
+    // 3. Sharpness / Blur via Modified Laplacian Variance
+    let lapSum = 0;
+    let lapSqSum = 0;
+    let lapCount = 0;
+
+    for (let y = 1; y < sampleH - 1; y++) {
+      const rowPrev = (y - 1) * sampleW;
+      const rowCurr = y * sampleW;
+      const rowNext = (y + 1) * sampleW;
+      for (let x = 1; x < sampleW - 1; x++) {
+        const lap =
+          gray[rowPrev + x] +
+          gray[rowNext + x] +
+          gray[rowCurr + x - 1] +
+          gray[rowCurr + x + 1] -
+          4 * gray[rowCurr + x];
+        lapSum += lap;
+        lapSqSum += lap * lap;
+        lapCount++;
+      }
+    }
+
+    const lapMean = lapSum / Math.max(1, lapCount);
+    const lapVar = lapSqSum / Math.max(1, lapCount) - lapMean * lapMean;
+    const sharpness = Math.min(100, Math.round(Math.sqrt(Math.max(0, lapVar)) * 3.5));
+
+    const isSharp = sharpness >= 24;
+    const isWellExposed = brightness >= 45 && brightness <= 235;
+    const hasNoGlare = glarePercent <= 10.0;
+
+    // Determine smart guidance code
+    let guidanceCode: DocumentQualityCheck["guidanceCode"] = "READY";
+    let guidanceText = "Đang tự động chụp...";
+
+    if (sizeRatio < minSize) {
+      guidanceCode = "TOO_SMALL";
+      guidanceText = "Đưa điện thoại gần tài liệu hơn";
+    } else if (sizeRatio > 0.88) {
+      guidanceCode = "TOO_LARGE";
+      guidanceText = "Đưa điện thoại ra xa một chút";
+    } else if (!isWellAligned) {
+      guidanceCode = "TOO_SKEWED";
+      guidanceText = "Căn thẳng góc với tài liệu";
+    } else if (!isWellExposed && brightness < 45) {
+      guidanceCode = "TOO_DARK";
+      guidanceText = "Tăng ánh sáng để ảnh rõ hơn";
+    } else if (!hasNoGlare) {
+      guidanceCode = "GLARE";
+      guidanceText = "Nghiêng nhẹ máy tránh bóng lóa sáng";
+    } else if (!isSharp) {
+      guidanceCode = "TOO_BLURRY";
+      guidanceText = "Giữ điện thoại ổn định để lấy nét";
+    }
+
+    const isReadyForCapture =
+      isSharp && isWellExposed && hasNoGlare && isGoodSize && isWellAligned;
+
+    return {
+      sharpness,
+      brightness,
+      glarePercent,
+      sizeRatio,
+      skewScore,
+      isSharp,
+      isWellExposed,
+      hasNoGlare,
+      isGoodSize,
+      isWellAligned,
+      isReadyForCapture,
+      guidanceCode,
+      guidanceText,
+    };
+  }
+
+  /**
+   * STAGE 5: CCCD / ID Card Front vs Back Visual Layout Classifier
+   * Analyzes photo box & national emblem on front vs bottom MRZ text lines & chip on back.
+   */
+  static analyzeCardSide(
+    sourceCanvas: HTMLCanvasElement | HTMLVideoElement | CanvasImageSource,
+    quad: QuadPoints
+  ): CardSideAnalysis {
+    const cardW = 320;
+    const cardH = 200;
+    const canvas = document.createElement("canvas");
+    canvas.width = cardW;
+    canvas.height = cardH;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+    if (!ctx) {
+      return {
+        predictedSide: "unknown",
+        frontConfidence: 0.5,
+        backConfidence: 0.5,
+        hasPhotoOrEmblem: false,
+        hasMRZOrChip: false,
+      };
+    }
+
+    // Warp perspective into standard card layout
+    const warped = this.warpPerspective(sourceCanvas as any, quad, cardW, cardH);
+    ctx.drawImage(warped, 0, 0, cardW, cardH);
+    const imgData = ctx.getImageData(0, 0, cardW, cardH);
+    const data = imgData.data;
+
+    // Feature 1: Left Half vs Right Half Contrast Asymmetry (Front has portrait photo on left)
+    let leftLumaSum = 0,
+      rightLumaSum = 0;
+    let leftVarSum = 0,
+      rightVarSum = 0;
+    const halfW = cardW / 2;
+
+    for (let y = 30; y < cardH - 30; y++) {
+      for (let x = 15; x < cardW - 15; x++) {
+        const idx = (y * cardW + x) * 4;
+        const luma = (data[idx] * 77 + data[idx + 1] * 150 + data[idx + 2] * 29) >> 8;
+        if (x < halfW) {
+          leftLumaSum += luma;
+        } else {
+          rightLumaSum += luma;
+        }
+      }
+    }
+
+    const halfPixels = (cardH - 60) * (halfW - 15);
+    const leftMean = leftLumaSum / halfPixels;
+    const rightMean = rightLumaSum / halfPixels;
+
+    for (let y = 30; y < cardH - 30; y++) {
+      for (let x = 15; x < cardW - 15; x++) {
+        const idx = (y * cardW + x) * 4;
+        const luma = (data[idx] * 77 + data[idx + 1] * 150 + data[idx + 2] * 29) >> 8;
+        if (x < halfW) {
+          leftVarSum += (luma - leftMean) * (luma - leftMean);
+        } else {
+          rightVarSum += (luma - rightMean) * (luma - rightMean);
+        }
+      }
+    }
+
+    const leftStd = Math.sqrt(leftVarSum / halfPixels);
+    const rightStd = Math.sqrt(rightVarSum / halfPixels);
+
+    // Feature 2: Bottom 25% MRZ High Frequency Text Stripes (Characteristic of CCCD Back)
+    let bottomHorizTransitions = 0;
+    const bottomStartY = Math.round(cardH * 0.72);
+
+    for (let y = bottomStartY; y < cardH - 10; y += 3) {
+      for (let x = 20; x < cardW - 20; x++) {
+        const idx0 = (y * cardW + x) * 4;
+        const idx1 = (y * cardW + x + 1) * 4;
+        const l0 = (data[idx0] * 77 + data[idx0 + 1] * 150 + data[idx0 + 2] * 29) >> 8;
+        const l1 = (data[idx1] * 77 + data[idx1 + 1] * 150 + data[idx1 + 2] * 29) >> 8;
+        if (Math.abs(l0 - l1) > 28) {
+          bottomHorizTransitions++;
+        }
+      }
+    }
+
+    // Compute Perceptual Hash
+    const pHash = this.computePerceptualHashFromCanvas(canvas);
+
+    // Front indicators: Left photo box has high texture variance (hair/face) & darker mean
+    const hasPhotoOrEmblem = leftStd > rightStd * 1.15 || leftMean < rightMean - 12;
+
+    // Back indicators: Bottom MRZ text lines have high horizontal transition count
+    const hasMRZOrChip = bottomHorizTransitions > 240 || (rightStd > leftStd * 1.10);
+
+    let frontConfidence = 0.5;
+    let backConfidence = 0.5;
+
+    if (hasPhotoOrEmblem && !hasMRZOrChip) {
+      frontConfidence = 0.85;
+      backConfidence = 0.15;
+    } else if (hasMRZOrChip && !hasPhotoOrEmblem) {
+      frontConfidence = 0.15;
+      backConfidence = 0.85;
+    } else if (hasPhotoOrEmblem) {
+      frontConfidence = 0.70;
+      backConfidence = 0.30;
+    }
+
+    const predictedSide: "front" | "back" | "unknown" =
+      frontConfidence > 0.65 ? "front" : backConfidence > 0.65 ? "back" : "unknown";
+
+    return {
+      predictedSide,
+      frontConfidence,
+      backConfidence,
+      hasPhotoOrEmblem,
+      hasMRZOrChip,
+      perceptualHash: pHash,
+    };
+  }
+
+  /**
+   * STAGE 6: Perceptual Difference Hash (dHash) for Anti-Duplicate Locking
+   */
+  static computePerceptualHashFromCanvas(canvas: HTMLCanvasElement): string {
+    const thumb = document.createElement("canvas");
+    thumb.width = 9;
+    thumb.height = 8;
+    const ctx = thumb.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return "0000000000000000";
+
+    ctx.drawImage(canvas, 0, 0, 9, 8);
+    const imgData = ctx.getImageData(0, 0, 9, 8);
+    const data = imgData.data;
+
+    let hash = "";
+    for (let y = 0; y < 8; y++) {
+      let rowByte = 0;
+      for (let x = 0; x < 8; x++) {
+        const idx1 = (y * 9 + x) * 4;
+        const idx2 = (y * 9 + x + 1) * 4;
+        const luma1 = (data[idx1] * 77 + data[idx1 + 1] * 150 + data[idx1 + 2] * 29) >> 8;
+        const luma2 = (data[idx2] * 77 + data[idx2 + 1] * 150 + data[idx2 + 2] * 29) >> 8;
+        if (luma1 > luma2) {
+          rowByte |= 1 << (7 - x);
+        }
+      }
+      hash += rowByte.toString(16).padStart(2, "0");
+    }
+
+    return hash;
+  }
+
+  /**
+   * Compare similarity between two perceptual hashes (0.0 to 1.0)
+   */
+  static compareHashSimilarity(hash1?: string, hash2?: string): number {
+    if (!hash1 || !hash2 || hash1.length !== hash2.length) return 0;
+
+    let matches = 0;
+    const totalBits = hash1.length * 4;
+
+    for (let i = 0; i < hash1.length; i++) {
+      const v1 = parseInt(hash1[i], 16);
+      const v2 = parseInt(hash2[i], 16);
+      const xor = v1 ^ v2;
+      // Count matching bits
+      let diff = 0;
+      for (let b = 0; b < 4; b++) {
+        if ((xor >> b) & 1) diff++;
+      }
+      matches += 4 - diff;
+    }
+
+    return matches / totalBits;
+  }
+
+  /**
+   * Evaluate background vs foreground luminance contrast across the 4 quad borders
+   */
+  private static evaluateBorderContrast(
+    q: QuadPoints,
+    blurred: Uint8Array,
+    w: number,
+    h: number
+  ): number {
+    const edges = [
+      { p1: q.topLeft, p2: q.topRight },
+      { p1: q.topRight, p2: q.bottomRight },
+      { p1: q.bottomRight, p2: q.bottomLeft },
+      { p1: q.bottomLeft, p2: q.topLeft },
+    ];
+
+    let totalContrast = 0;
+    const samples = 8;
+    const delta = 4; // Sample 4px inside vs 4px outside
+
+    for (const edge of edges) {
+      const dx = edge.p2.x - edge.p1.x;
+      const dy = edge.p2.y - edge.p1.y;
+      const len = Math.hypot(dx, dy);
+      if (len === 0) continue;
+
+      const nx = -dy / len;
+      const ny = dx / len;
+
+      let edgeDiff = 0;
+      for (let s = 1; s <= samples; s++) {
+        const t = s / (samples + 1);
+        const cx = edge.p1.x + dx * t;
+        const cy = edge.p1.y + dy * t;
+
+        const inX = Math.round(cx - nx * delta);
+        const inY = Math.round(cy - ny * delta);
+        const outX = Math.round(cx + nx * delta);
+        const outY = Math.round(cy + ny * delta);
+
+        if (inX >= 0 && inX < w && inY >= 0 && inY < h && outX >= 0 && outX < w && outY >= 0 && outY < h) {
+          const lumaIn = blurred[inY * w + inX];
+          const lumaOut = blurred[outY * w + outX];
+          edgeDiff += Math.abs(lumaIn - lumaOut);
+        }
+      }
+      totalContrast += edgeDiff / samples;
+    }
+
+    const avgContrast = totalContrast / 4;
+    return Math.min(1, avgContrast / 35);
   }
 
   /**
@@ -398,7 +1006,7 @@ export class CVEngine {
     ];
 
     let totalEdgeStrength = 0;
-    const samplesPerEdge = 12;
+    const samplesPerEdge = 14;
 
     for (const [p1, p2] of edges) {
       let edgeSum = 0;
@@ -414,7 +1022,7 @@ export class CVEngine {
     }
 
     const avgEdgeMag = totalEdgeStrength / 4;
-    return Math.min(1, avgEdgeMag / 45);
+    return Math.min(1, avgEdgeMag / 42);
   }
 
   /**
@@ -456,7 +1064,7 @@ export class CVEngine {
       if (len1 === 0 || len2 === 0) continue;
 
       const cosTheta = Math.abs((v1x * v2x + v1y * v2y) / (len1 * len2));
-      const angleScore = Math.max(0, 1 - cosTheta * 1.6);
+      const angleScore = Math.max(0, 1 - cosTheta * 1.5);
       totalScore += angleScore;
     }
 
@@ -472,15 +1080,15 @@ export class CVEngine {
     h: number,
     avgLuma: number
   ): QuadPoints | null {
-    const threshold = Math.min(210, Math.max(95, avgLuma * 1.15));
+    const threshold = Math.min(210, Math.max(90, avgLuma * 1.12));
     let minX = w,
       maxX = 0,
       minY = h,
       maxY = 0;
     let count = 0;
 
-    const marginX = Math.round(w * 0.05);
-    const marginY = Math.round(h * 0.05);
+    const marginX = Math.round(w * 0.04);
+    const marginY = Math.round(h * 0.04);
 
     for (let y = marginY; y < h - marginY; y++) {
       for (let x = marginX; x < w - marginX; x++) {
@@ -498,7 +1106,7 @@ export class CVEngine {
     const totalArea = w * h;
     const ratio = docArea / totalArea;
 
-    if (ratio > 0.12 && ratio < 0.94 && count > 150) {
+    if (ratio > 0.14 && ratio < 0.92 && count > 120) {
       return {
         topLeft: { x: minX, y: minY },
         topRight: { x: maxX, y: minY },
@@ -605,7 +1213,7 @@ export class CVEngine {
   }
 
   /**
-   * Reduce arbitrary N-gon (5-9 points) to 4 most significant corners
+   * Reduce arbitrary N-gon (5-8 points) to 4 most significant corners
    */
   private static reduceTo4Corners(points: Point[]): Point[] {
     const centroid = points.reduce(
@@ -679,7 +1287,6 @@ export class CVEngine {
 
   /**
    * Sort 4 points into [TopLeft, TopRight, BottomRight, BottomLeft]
-   * Uses polar angles & centroid projection to guarantee no flipping or swapping
    */
   static orderQuadPoints(points: Point[]): QuadPoints {
     if (points.length === 4) {
@@ -694,7 +1301,7 @@ export class CVEngine {
   }
 
   /**
-   * Validate that 4 points form a valid convex quad with plausible interior angles
+   * Validate that 4 points form a valid convex quad
    */
   static isValidConvexQuad(q: QuadPoints, boundW: number, boundH: number): boolean {
     const pts = [q.topLeft, q.topRight, q.bottomRight, q.bottomLeft];
@@ -709,11 +1316,10 @@ export class CVEngine {
       return false;
     }
 
-    // Ratio of opposite edges should not be absurd (must be between 0.40 and 2.5)
-    if (topW / botW < 0.4 || topW / botW > 2.5) return false;
-    if (leftH / rightH < 0.4 || leftH / rightH > 2.5) return false;
+    if (topW / botW < 0.38 || topW / botW > 2.6) return false;
+    if (leftH / rightH < 0.38 || leftH / rightH > 2.6) return false;
 
-    // Check convexity & orientation via cross product signs
+    // Convexity check via cross product signs
     let sign = 0;
     for (let i = 0; i < 4; i++) {
       const p1 = pts[i];
@@ -796,7 +1402,6 @@ export class CVEngine {
 
     if (!outCtx) return outCanvas;
 
-    // Direct Homography projective warp with bilinear sampling
     const srcCanvas = document.createElement("canvas");
     const sw = (source as any).videoWidth || (source as any).naturalWidth || (source as any).width || 1280;
     const sh = (source as any).videoHeight || (source as any).naturalHeight || (source as any).height || 720;
@@ -823,7 +1428,7 @@ export class CVEngine {
       [quad.topLeft, quad.topRight, quad.bottomRight, quad.bottomLeft]
     );
 
-    // Warp pixels via bilinear interpolation
+    // Bilinear interpolation warp
     for (let y = 0; y < targetH; y++) {
       const rowOffset = y * targetW * 4;
       for (let x = 0; x < targetW; x++) {
@@ -883,7 +1488,6 @@ export class CVEngine {
       B.push(dy);
     }
 
-    // Solve 8x8 linear system via Gaussian elimination
     const h = this.solveLinearSystem(A, B);
     return [h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 1.0];
   }
@@ -934,7 +1538,7 @@ export class CVEngine {
   }
 
   /**
-   * Apply clean, professional document filters (Document Clean, Magic Color, B&W, Grayscale, etc.)
+   * Apply clean, professional document filters
    */
   static applyFilter(
     sourceCanvas: HTMLCanvasElement,
@@ -1010,7 +1614,6 @@ export class CVEngine {
         data[i + 2] = b;
       }
     } else if (filter === "photo") {
-      // Color photo enhancement
       for (let i = 0; i < len; i += 4) {
         data[i] = Math.min(255, Math.max(0, (data[i] - 128) * 1.15 + 128 + 5));
         data[i + 1] = Math.min(255, Math.max(0, (data[i + 1] - 128) * 1.15 + 128 + 5));
@@ -1036,7 +1639,7 @@ export class CVEngine {
   }
 
   /**
-   * Stitch multiple scanned pages vertically into a single continuous long image (ảnh dài)
+   * Stitch multiple scanned pages vertically into a single continuous long image
    */
   static async stitchVerticalLongImage(
     pages: { processedImage: string }[],
@@ -1050,7 +1653,6 @@ export class CVEngine {
       loadedImages.push(img);
     }
 
-    // Determine max width
     const targetWidth = Math.max(...loadedImages.map((img) => img.naturalWidth || 1200));
     let totalHeight = 0;
 
@@ -1070,7 +1672,6 @@ export class CVEngine {
     const ctx = canvas.getContext("2d");
     if (!ctx) return "";
 
-    // White background
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, targetWidth, totalHeight);
 

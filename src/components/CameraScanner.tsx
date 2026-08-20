@@ -8,7 +8,6 @@ import {
   Check,
   Sparkles,
   ArrowLeft,
-  Info,
   AlertCircle,
   FileText,
   CreditCard,
@@ -19,10 +18,13 @@ import {
   Trash2,
   Plus,
   CheckCircle2,
-  Layers,
+  Eye,
+  Sun,
+  ShieldCheck,
+  Smartphone,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { ScanMode, QuadPoints, ScannedPage, FilterMode, Point } from "../types";
+import { ScanMode, QuadPoints, ScannedPage, FilterMode, Point, DocumentQualityCheck, CardSideAnalysis } from "../types";
 import { CVEngine } from "../utils/cvEngine";
 import { DocumentTracker } from "../utils/documentTracker";
 import { CropAdjuster } from "./CropAdjuster";
@@ -71,6 +73,11 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
   const [isDetected, setIsDetected] = useState<boolean>(false);
   const [detectedQuad, setDetectedQuad] = useState<QuadPoints | null>(null);
   const [screenQuad, setScreenQuad] = useState<QuadPoints | null>(null);
+
+  // Quality and Card Side Analysis
+  const [latestQuality, setLatestQuality] = useState<DocumentQualityCheck | null>(null);
+  const [latestCardSide, setLatestCardSide] = useState<CardSideAnalysis | null>(null);
+  const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
 
   // For 2-sided modes (CCCD / Driver License)
   const [cardSide, setCardSide] = useState<"front" | "back">("front");
@@ -160,6 +167,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     setStabilityScore(0);
     setConfidenceScore(0);
     setIsDetected(false);
+    setDuplicateWarning(null);
     if (scannerState !== "REVIEW") {
       setScannerState("SEARCHING");
     }
@@ -206,7 +214,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     }
   };
 
-  // Perform High Quality Capture & Warp
+  // Perform High Quality Capture, Warp & Perceptual Anti-Duplicate Verification
   const captureFrame = useCallback(
     async (manualQuad?: QuadPoints) => {
       if (!videoRef.current || isCapturingRef.current || currentScannerStateRef.current === "REVIEW") {
@@ -218,7 +226,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
       setIsFlashing(true);
       triggerCaptureFeedback();
 
-      setTimeout(() => setIsFlashing(false), 130);
+      setTimeout(() => setIsFlashing(false), 140);
 
       const video = videoRef.current;
       const vw = video.videoWidth || 1280;
@@ -228,7 +236,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
       const frameCanvas = document.createElement("canvas");
       frameCanvas.width = vw;
       frameCanvas.height = vh;
-      const ctx = frameCanvas.getContext("2d");
+      const ctx = frameCanvas.getContext("2d", { willReadFrequently: true });
       if (!ctx) {
         isCapturingRef.current = false;
         setScannerState("SEARCHING");
@@ -250,6 +258,23 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
       // Warp perspective
       const warped = CVEngine.warpPerspective(frameCanvas, q);
 
+      // Compute perceptual hash for duplicate detection
+      const pHash = CVEngine.computePerceptualHashFromCanvas(warped);
+
+      // Anti-duplicate validation for CCCD / 2-sided card
+      if ((mode === "cccd" || mode === "driver_license") && cardSide === "back" && frontPageDraft?.perceptualHash) {
+        const similarity = CVEngine.compareHashSimilarity(frontPageDraft.perceptualHash, pHash);
+        if (similarity > 0.88) {
+          // Warning: User captured the front side again!
+          setDuplicateWarning("Ảnh bị trùng với Mặt trước! Vui lòng lật sang Mặt sau của thẻ.");
+          setTimeout(() => setDuplicateWarning(null), 3500);
+          isCapturingRef.current = false;
+          setScannerState("SEARCHING");
+          trackerRef.current.reset(1200);
+          return;
+        }
+      }
+
       // Apply initial clean filter
       const defaultFilter: FilterMode = mode === "photo" ? "photo" : "document";
       const processedCanvas = CVEngine.applyFilter(warped, defaultFilter, 0);
@@ -265,15 +290,17 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         createdAt: Date.now(),
         width: processedCanvas.width,
         height: processedCanvas.height,
+        perceptualHash: pHash,
+        detectedSide: cardSide,
       };
 
       // Transition to REVIEW state & lock Auto-Capture
       setReviewingPage(newPage);
       setScannerState("REVIEW");
-      trackerRef.current.setCooldown(5000); // Strict capture lock
+      trackerRef.current.setCooldown(6000); // Strict capture lock
       isCapturingRef.current = false;
     },
-    [detectedQuad, mode]
+    [detectedQuad, mode, cardSide, frontPageDraft]
   );
 
   // Next Page / Confirm Action
@@ -292,7 +319,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         setCardSide("back");
         setGuidance("Lật sang MẶT SAU của thẻ");
         setScannerState("SEARCHING");
-        trackerRef.current.reset(1200);
+        trackerRef.current.reset(1500);
         setSteadyCounter(0);
         return;
       } else {
@@ -328,6 +355,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     const defaultFilter: FilterMode = reviewingPage.filter || "document";
     const processedCanvas = CVEngine.applyFilter(warpedCanvas, defaultFilter, reviewingPage.rotation || 0);
     const processedDataUrl = processedCanvas.toDataURL("image/jpeg", 0.92);
+    const pHash = CVEngine.computePerceptualHashFromCanvas(warpedCanvas);
 
     setReviewingPage({
       ...reviewingPage,
@@ -335,6 +363,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
       quad: adjustedQuad,
       width: processedCanvas.width,
       height: processedCanvas.height,
+      perceptualHash: pHash,
     });
     setIsAdjustingCrop(false);
   };
@@ -360,7 +389,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         if (ctx) {
           ctx.clearRect(0, 0, vw, vh);
 
-          // If currently in REVIEW or CAPTURING, do not compute detection or auto-capture
+          // If currently in REVIEW or CAPTURING, skip detection calculation
           if (currentState === "REVIEW" || isCapturingRef.current) {
             animFrameId.current = requestAnimationFrame(processFrame);
             return;
@@ -376,12 +405,18 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
             targetAspect
           );
 
+          setLatestQuality(detection.quality || null);
+          setLatestCardSide(detection.cardSide || null);
+
           // 2. Tracking & Temporal Smoothing via DocumentTracker
           const trackResult = trackerRef.current.update(
             detection.isRealQuad ? detection.quad : null,
             detection.confidence,
             video.videoWidth,
-            video.videoHeight
+            video.videoHeight,
+            detection.quality,
+            detection.cardSide,
+            mode === "cccd" || mode === "driver_license" ? cardSide : undefined
           );
 
           setIsDetected(trackResult.isDetected);
@@ -451,15 +486,21 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           if (trackResult.isReadyForCapture) {
             ctx.strokeStyle = "#10b981"; // Emerald green
             ctx.lineWidth = 3.5;
-            ctx.fillStyle = "rgba(16, 185, 129, 0.20)";
+            ctx.fillStyle = "rgba(16, 185, 129, 0.22)";
             ctx.shadowColor = "#10b981";
-            ctx.shadowBlur = 14;
+            ctx.shadowBlur = 16;
+          } else if (trackResult.isDetected && trackResult.stabilityScore >= 50) {
+            ctx.strokeStyle = "#06b6d4"; // Cyan
+            ctx.lineWidth = 2.8;
+            ctx.fillStyle = "rgba(6, 182, 212, 0.12)";
+            ctx.shadowColor = "#06b6d4";
+            ctx.shadowBlur = 10;
           } else if (trackResult.isDetected) {
             ctx.strokeStyle = "#3b82f6"; // Primary Blue
-            ctx.lineWidth = 2.5;
+            ctx.lineWidth = 2.2;
             ctx.fillStyle = "rgba(59, 130, 246, 0.08)";
             ctx.shadowColor = "#3b82f6";
-            ctx.shadowBlur = 8;
+            ctx.shadowBlur = 6;
           } else {
             ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
             ctx.lineWidth = 1.5;
@@ -476,7 +517,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
             ctx.save();
             ctx.translate(pt.x, pt.y);
 
-            // Outer dot
+            // Outer target circle
             ctx.beginPath();
             ctx.arc(0, 0, trackResult.isReadyForCapture ? 8 : 6, 0, Math.PI * 2);
             ctx.fillStyle = trackResult.isReadyForCapture
@@ -492,9 +533,9 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
             // Precision Corner angle bracket
             ctx.rotate((angleDeg * Math.PI) / 180);
             ctx.beginPath();
-            ctx.moveTo(0, 18);
+            ctx.moveTo(0, 20);
             ctx.lineTo(0, 0);
-            ctx.lineTo(18, 0);
+            ctx.lineTo(20, 0);
             ctx.strokeStyle = trackResult.isReadyForCapture
               ? "#10b981"
               : trackResult.isDetected
@@ -516,45 +557,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           setScreenQuad(curScreen);
 
           // 6. Update Guidance Message
-          if (mode === "cccd") {
-            if (cardSide === "front") {
-              setGuidance(
-                trackResult.isReadyForCapture
-                  ? "Đã sẵn sàng - Giữ yên để chụp Mặt trước..."
-                  : trackResult.isDetected
-                  ? "Giữ điện thoại ổn định để lấy nét Mặt trước"
-                  : "Đưa MẶT TRƯỚC CCCD vào khung hình"
-              );
-            } else {
-              setGuidance(
-                trackResult.isReadyForCapture
-                  ? "Đã sẵn sàng - Giữ yên để chụp Mặt sau..."
-                  : trackResult.isDetected
-                  ? "Giữ điện thoại ổn định để lấy nét Mặt sau"
-                  : "Đưa MẶT SAU CCCD vào khung hình"
-              );
-            }
-          } else if (mode === "driver_license") {
-            if (cardSide === "front") {
-              setGuidance(
-                trackResult.isReadyForCapture
-                  ? "Đã sẵn sàng - Giữ yên để chụp Bằng lái..."
-                  : trackResult.isDetected
-                  ? "Giữ điện thoại ổn định để lấy nét"
-                  : "Đưa MẶT TRƯỚC Bằng lái vào khung"
-              );
-            } else {
-              setGuidance(
-                trackResult.isReadyForCapture
-                  ? "Đã sẵn sàng - Giữ yên để chụp Mặt sau..."
-                  : trackResult.isDetected
-                  ? "Giữ điện thoại ổn định để lấy nét"
-                  : "Đưa MẶT SAU Bằng lái vào khung"
-              );
-            }
-          } else {
-            setGuidance(trackResult.guidance);
-          }
+          setGuidance(trackResult.guidance);
 
           // 7. Auto Capture Triggering (Strictly when isReadyForCapture === true)
           if (
@@ -603,6 +606,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           const warped = CVEngine.warpPerspective(img, q);
           const processedCanvas = CVEngine.applyFilter(warped, "document", 0);
           const processedUrl = processedCanvas.toDataURL("image/jpeg", 0.92);
+          const pHash = CVEngine.computePerceptualHashFromCanvas(warped);
 
           const newPage: ScannedPage = {
             id: `page_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
@@ -614,6 +618,8 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
             createdAt: Date.now(),
             width: processedCanvas.width,
             height: processedCanvas.height,
+            perceptualHash: pHash,
+            detectedSide: cardSide,
           };
 
           setReviewingPage(newPage);
@@ -634,7 +640,15 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     <div className="fixed inset-0 z-40 flex flex-col bg-black text-white select-none h-screen min-h-screen w-full overflow-hidden">
       {/* Visual Shutter Flash Effect */}
       {isFlashing && (
-        <div className="absolute inset-0 z-50 bg-white opacity-85 pointer-events-none transition-opacity duration-150" />
+        <div className="absolute inset-0 z-50 bg-white opacity-85 pointer-events-none transition-opacity duration-140" />
+      )}
+
+      {/* Duplicate Page / Side Warning Toast */}
+      {duplicateWarning && (
+        <div className="absolute top-16 inset-x-4 z-50 max-w-md mx-auto p-3 rounded-2xl bg-amber-600/95 text-white font-semibold text-xs shadow-2xl border border-amber-400 flex items-center gap-2.5 animate-bounce">
+          <AlertCircle className="w-5 h-5 shrink-0 text-amber-200" />
+          <span>{duplicateWarning}</span>
+        </div>
       )}
 
       {/* Top Header Bar */}
@@ -651,7 +665,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         </button>
 
         {/* Guidance Pill */}
-        <div className="flex items-center gap-2 px-3.5 py-2 rounded-full bg-slate-900/90 backdrop-blur border border-slate-700/60 shadow-lg text-xs font-medium text-slate-200 max-w-[210px] sm:max-w-xs truncate">
+        <div className="flex items-center gap-2 px-3.5 py-2 rounded-full bg-slate-900/90 backdrop-blur border border-slate-700/60 shadow-lg text-xs font-medium text-slate-200 max-w-[220px] sm:max-w-xs truncate">
           {scannerState === "READY" ? (
             <div className="flex items-center gap-1.5 text-emerald-400 font-semibold truncate">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping shrink-0" />
@@ -667,7 +681,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           )}
         </div>
 
-        {/* Top Actions: Torch & Mode Info */}
+        {/* Top Actions: Torch & Auto-Capture */}
         <div className="flex items-center gap-2">
           {hasTorch && (
             <button
@@ -719,25 +733,39 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           className="absolute inset-0 w-full h-full pointer-events-none z-10"
         />
 
-        {/* Real-time Stability & Quality Meter */}
+        {/* Real-time Quality Meters (Độ nét, Độ sáng, Ổn định) */}
         {isDetected && scannerState !== "REVIEW" && (
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3 px-3 py-1.5 rounded-full bg-slate-950/80 backdrop-blur border border-slate-700/60 shadow-lg text-[11px]">
-            <div className="flex items-center gap-1.5">
-              <span className="text-slate-400">Độ nét:</span>
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-slate-950/85 backdrop-blur border border-slate-700/60 shadow-lg text-[11px]">
+            <div className="flex items-center gap-1">
+              <Eye className="w-3 h-3 text-slate-400" />
+              <span className="text-slate-400">Nét:</span>
               <span
                 className={`font-semibold ${
-                  confidenceScore >= 70 ? "text-emerald-400" : "text-amber-400"
+                  latestQuality?.isSharp ? "text-emerald-400" : "text-amber-400"
                 }`}
               >
-                {confidenceScore}%
+                {latestQuality?.sharpness || confidenceScore}%
               </span>
             </div>
             <div className="w-[1px] h-3 bg-slate-700" />
-            <div className="flex items-center gap-1.5">
-              <span className="text-slate-400">Độ ổn định:</span>
+            <div className="flex items-center gap-1">
+              <Sun className="w-3 h-3 text-slate-400" />
+              <span className="text-slate-400">Sáng:</span>
               <span
                 className={`font-semibold ${
-                  stabilityScore >= 75 ? "text-emerald-400" : "text-amber-400"
+                  latestQuality?.isWellExposed ? "text-emerald-400" : "text-amber-400"
+                }`}
+              >
+                {latestQuality?.brightness || 120}
+              </span>
+            </div>
+            <div className="w-[1px] h-3 bg-slate-700" />
+            <div className="flex items-center gap-1">
+              <ShieldCheck className="w-3 h-3 text-slate-400" />
+              <span className="text-slate-400">Ổn định:</span>
+              <span
+                className={`font-semibold ${
+                  stabilityScore >= 70 ? "text-emerald-400" : "text-amber-400"
                 }`}
               >
                 {stabilityScore}%
@@ -748,7 +776,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
 
         {/* 2-Sided Card Guide Watermark */}
         {is2SidedCard && scannerState !== "REVIEW" && (
-          <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 px-4 py-1.5 rounded-full bg-indigo-950/85 backdrop-blur border border-indigo-700/60 text-xs font-semibold text-indigo-200 shadow-xl animate-bounce">
+          <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 px-4 py-1.5 rounded-full bg-indigo-950/85 backdrop-blur border border-indigo-700/60 text-xs font-semibold text-indigo-200 shadow-xl">
             <IdCard className="w-4 h-4 text-indigo-400" />
             <span>
               {cardSide === "front" ? "ĐANG CHỤP: MẶT TRƯỚC THẺ" : "ĐANG CHỤP: MẶT SAU THẺ"}
@@ -896,7 +924,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
               )}
             </div>
 
-            {/* Complete Scanning Session Button (if already has pages or finished) */}
+            {/* Complete Scanning Session Button */}
             {!is2SidedCard && (
               <button
                 id="btn-review-finish-all"

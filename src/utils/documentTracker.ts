@@ -1,4 +1,10 @@
-import { Point, QuadPoints, DocumentTrackingState } from "../types";
+import {
+  Point,
+  QuadPoints,
+  DocumentTrackingState,
+  DocumentQualityCheck,
+  CardSideAnalysis,
+} from "../types";
 
 export interface TrackerConfig {
   historySize: number;
@@ -12,18 +18,18 @@ export interface TrackerConfig {
 
 export const DEFAULT_TRACKER_CONFIG: TrackerConfig = {
   historySize: 10,
-  minConfidenceHigh: 0.60,
-  minConfidenceLow: 0.35,
-  minStabilityScoreForCapture: 80,
-  minConfidenceForCapture: 0.65,
-  requiredStableFrames: 8,
-  maxCornerDriftRatio: 0.026, // 2.6% of frame width (stable stillness)
+  minConfidenceHigh: 0.55,
+  minConfidenceLow: 0.32,
+  minStabilityScoreForCapture: 75,
+  minConfidenceForCapture: 0.60,
+  requiredStableFrames: 7,
+  maxCornerDriftRatio: 0.028, // 2.8% of frame width (stable stillness)
 };
 
 /**
  * Real-time Document Tracker & Temporal Stability Filter
  * Manages 4-corner normalization, dead-band filtering, exponential smoothing,
- * jitter suppression, hysteresis state machine, and stable auto-capture gating.
+ * jitter suppression, hysteresis state machine, and quality-gated auto-capture.
  */
 export class DocumentTracker {
   private config: TrackerConfig;
@@ -84,7 +90,6 @@ export class DocumentTracker {
   /**
    * Normalize 4 corners into strictly deterministic order:
    * P0 = TopLeft, P1 = TopRight, P2 = BottomRight, P3 = BottomLeft.
-   * Uses centroid polar clockwise angle sorting and top-left distance scoring.
    */
   static normalize4Corners(points: Point[]): QuadPoints {
     if (points.length !== 4) {
@@ -102,7 +107,7 @@ export class DocumentTracker {
       return angleA - angleB;
     });
 
-    // 3. Find the Top-Left corner: the point in the top quadrant with minimal (x + y * 1.25)
+    // 3. Find the Top-Left corner: the point in top-left quadrant with minimal (x + y * 1.25)
     let bestTlIdx = 0;
     let minScore = Infinity;
 
@@ -115,7 +120,7 @@ export class DocumentTracker {
       }
     }
 
-    // 4. Reorder array so index 0 = TL, index 1 = TR, index 2 = BR, index 3 = BL
+    // 4. Reorder array: TL -> TR -> BR -> BL
     const tl = clockwise[bestTlIdx];
     const tr = clockwise[(bestTlIdx + 1) % 4];
     const br = clockwise[(bestTlIdx + 2) % 4];
@@ -152,13 +157,16 @@ export class DocumentTracker {
 
   /**
    * Main frame update step: Processes raw detection, applies dead-band filtering,
-   * temporal smoothing, evaluates stability, and updates hysteresis state.
+   * temporal smoothing, checks quality metrics, and updates auto-capture state.
    */
   update(
     rawQuad: QuadPoints | null,
     rawConfidence: number,
     frameWidth: number,
-    frameHeight: number
+    frameHeight: number,
+    quality?: DocumentQualityCheck,
+    cardSide?: CardSideAnalysis,
+    expectedCardSide?: "front" | "back"
   ): DocumentTrackingState {
     const fw = frameWidth || 1280;
     const fh = frameHeight || 720;
@@ -177,7 +185,9 @@ export class DocumentTracker {
           stabilityScore: 0,
           stableFrames: 0,
           isReadyForCapture: false,
-          guidance: "Đang lưu trang vừa chụp...",
+          guidance: "Đang lưu trang...",
+          quality,
+          cardSide,
         };
       }
     }
@@ -225,8 +235,7 @@ export class DocumentTracker {
         const d3 = DocumentTracker.dist(currentNormQuad.bottomLeft, this.smoothedQuad.bottomLeft);
         const maxJump = Math.max(d0, d1, d2, d3);
 
-        // If sudden jump > 22% of screen width and confidence is moderate, reject as transient noise/hand pass
-        if (maxJump > fw * 0.22 && confidence < 0.90) {
+        if (maxJump > fw * 0.22 && confidence < 0.88) {
           isOutlier = true;
         }
       }
@@ -237,7 +246,7 @@ export class DocumentTracker {
         if (!this.smoothedQuad) {
           this.smoothedQuad = currentNormQuad;
         } else {
-          // Dead-band & Adaptive Smoothing:
+          // Dead-band & Adaptive Smoothing
           const d0 = DocumentTracker.dist(currentNormQuad.topLeft, this.smoothedQuad.topLeft);
           const d1 = DocumentTracker.dist(currentNormQuad.topRight, this.smoothedQuad.topRight);
           const d2 = DocumentTracker.dist(currentNormQuad.bottomRight, this.smoothedQuad.bottomRight);
@@ -248,12 +257,11 @@ export class DocumentTracker {
 
           let alpha = 0.25;
 
-          // Dead-band zone: If movement is tiny (< 1.6% of width), apply heavy damping
-          // so the polygon remains 100% stable without micro-jittering!
+          // Dead-band anchor to eliminate micro-jittering
           if (maxCornerDrift < fw * 0.016) {
-            alpha = 0.03; // Micro-damping (anchors polygon)
+            alpha = 0.03;
           } else if (driftRatio > 0.045) {
-            alpha = 0.50; // Follow user's repositioning fluidly
+            alpha = 0.50;
           } else if (driftRatio > 0.02) {
             alpha = 0.30;
           }
@@ -274,7 +282,6 @@ export class DocumentTracker {
           };
         }
 
-        // Add to stability history
         this.history.push(currentNormQuad);
         if (this.history.length > this.config.historySize) {
           this.history.shift();
@@ -298,12 +305,10 @@ export class DocumentTracker {
         if (m > maxHistoryDrift) maxHistoryDrift = m;
       }
 
-      // Check area stability across window
       const curArea = DocumentTracker.calcQuadArea(cur);
       const prevArea = DocumentTracker.calcQuadArea(this.history[0]);
       const areaDeltaPct = Math.abs(curArea - prevArea) / Math.max(1, curArea);
 
-      // Stability formula
       const driftScore = Math.max(0, 100 - (maxHistoryDrift / driftThreshold) * 80);
       const areaScore = Math.max(0, 100 - areaDeltaPct * 250);
 
@@ -314,11 +319,33 @@ export class DocumentTracker {
     this.lastStabilityScore = stabilityScore;
     this.lastConfidence = confidence;
 
-    // 4. Stable Frames Counter for Auto-Capture Gating
+    // 4. Quality & Card-Side Validation Gating
+    let qualityPassed = true;
+    let specificGuidance: string | null = null;
+
+    if (quality) {
+      if (!quality.isReadyForCapture) {
+        qualityPassed = false;
+        specificGuidance = quality.guidanceText;
+      }
+    }
+
+    // Check for side conflict (e.g. if we are expecting Back side but detected Front side with high confidence)
+    let cardSideConflict = false;
+    if (expectedCardSide && cardSide) {
+      if (expectedCardSide === "back" && cardSide.predictedSide === "front" && cardSide.frontConfidence > 0.78) {
+        cardSideConflict = true;
+        qualityPassed = false;
+        specificGuidance = "Vui lòng lật sang MẶT SAU của CCCD!";
+      }
+    }
+
+    // 5. Stable Frames Counter for Auto-Capture Gating
     const isStableThisFrame =
       this.isDetectedState &&
       confidence >= this.config.minConfidenceForCapture &&
-      stabilityScore >= this.config.minStabilityScoreForCapture;
+      stabilityScore >= this.config.minStabilityScoreForCapture &&
+      qualityPassed;
 
     if (isStableThisFrame) {
       this.stableFrames++;
@@ -328,12 +355,14 @@ export class DocumentTracker {
 
     const isReadyForCapture = this.stableFrames >= this.config.requiredStableFrames;
 
-    // 5. User-friendly guidance message
+    // 6. User-friendly guidance message
     let guidance = "Đưa tài liệu vào khung hình";
-    if (isReadyForCapture) {
-      guidance = "Đã nhận diện chuẩn - Đang tự động chụp...";
+    if (specificGuidance) {
+      guidance = specificGuidance;
+    } else if (isReadyForCapture) {
+      guidance = "Đang tự động chụp...";
     } else if (this.isDetectedState) {
-      if (stabilityScore < 65) {
+      if (stabilityScore < 60) {
         guidance = "Giữ điện thoại ổn định để lấy nét...";
       } else {
         const progressPct = Math.round(
@@ -352,6 +381,8 @@ export class DocumentTracker {
       stableFrames: this.stableFrames,
       isReadyForCapture,
       guidance,
+      quality,
+      cardSide,
     };
   }
 }
