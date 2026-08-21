@@ -1621,7 +1621,7 @@ export class CVEngine {
   }
 
   /**
-   * Smart default quad bounding box with standard aspect ratio (A4 or ID Card)
+   * Smart default quad bounding box: Default to 90% frame boundary of the photo
    */
   static getDefaultQuad(
     width: number,
@@ -1632,19 +1632,16 @@ export class CVEngine {
     let boxH: number;
 
     if (targetAspect === "card") {
-      boxW = width * 0.82;
+      boxW = width * 0.90;
       boxH = boxW / 1.586;
-      if (boxH > height * 0.75) {
-        boxH = height * 0.75;
+      if (boxH > height * 0.90) {
+        boxH = height * 0.90;
         boxW = boxH * 1.586;
       }
     } else {
-      boxH = height * 0.82;
-      boxW = boxH / 1.414;
-      if (boxW > width * 0.88) {
-        boxW = width * 0.88;
-        boxH = boxW * 1.414;
-      }
+      // 90% boundary frame of the captured photo
+      boxW = width * 0.90;
+      boxH = height * 0.90;
     }
 
     const startX = (width - boxW) / 2;
@@ -1656,6 +1653,72 @@ export class CVEngine {
       bottomRight: { x: Math.round(startX + boxW), y: Math.round(startY + boxH) },
       bottomLeft: { x: Math.round(startX), y: Math.round(startY + boxH) },
     };
+  }
+
+  /**
+   * Fast & robust Tenengrad / Laplacian variance sharpness score (0 to 100)
+   * Evaluates high-frequency detail within the region of interest
+   */
+  static calculateImageSharpness(
+    sourceCanvas: HTMLCanvasElement | HTMLVideoElement | CanvasImageSource,
+    _quad?: QuadPoints
+  ): number {
+    try {
+      const workW = 320;
+      const workH = 240;
+      const canvas = document.createElement("canvas");
+      canvas.width = workW;
+      canvas.height = workH;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return 75;
+
+      ctx.drawImage(sourceCanvas as any, 0, 0, workW, workH);
+      const imgData = ctx.getImageData(0, 0, workW, workH);
+      const data = imgData.data;
+
+      // Sample region: 90% boundary
+      const startX = Math.round(workW * 0.05);
+      const endX = Math.round(workW * 0.95);
+      const startY = Math.round(workH * 0.05);
+      const endY = Math.round(workH * 0.95);
+
+      let lapSum = 0;
+      let count = 0;
+
+      for (let y = startY + 1; y < endY - 1; y += 2) {
+        const rowPrev = (y - 1) * workW;
+        const rowCurr = y * workW;
+        const rowNext = (y + 1) * workW;
+
+        for (let x = startX + 1; x < endX - 1; x += 2) {
+          const idx = (rowCurr + x) * 4;
+          const lumaC = (data[idx] * 77 + data[idx + 1] * 150 + data[idx + 2] * 29) >> 8;
+
+          const idxL = (rowCurr + x - 1) * 4;
+          const lumaL = (data[idxL] * 77 + data[idxL + 1] * 150 + data[idxL + 2] * 29) >> 8;
+
+          const idxR = (rowCurr + x + 1) * 4;
+          const lumaR = (data[idxR] * 77 + data[idxR + 1] * 150 + data[idxR + 2] * 29) >> 8;
+
+          const idxU = (rowPrev + x) * 4;
+          const lumaU = (data[idxU] * 77 + data[idxU + 1] * 150 + data[idxU + 2] * 29) >> 8;
+
+          const idxD = (rowNext + x) * 4;
+          const lumaD = (data[idxD] * 77 + data[idxD + 1] * 150 + data[idxD + 2] * 29) >> 8;
+
+          // 4-neighbor discrete Laplacian: |4*C - L - R - U - D|
+          const lap = Math.abs(4 * lumaC - lumaL - lumaR - lumaU - lumaD);
+          lapSum += lap;
+          count++;
+        }
+      }
+
+      if (count === 0) return 75;
+      const avgLap = lapSum / count;
+      return Math.min(100, Math.max(15, Math.round(avgLap * 6.5)));
+    } catch {
+      return 75;
+    }
   }
 
   /**

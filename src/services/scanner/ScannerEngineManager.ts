@@ -15,7 +15,7 @@ export class ScannerEngineManager {
   private activeEngine: IDocumentScannerEngine | null = null;
   private videoElement: HTMLVideoElement | null = null;
   private currentConfig: ScannerEngineConfig = {
-    autoCapture: true,
+    autoCapture: false,
     mode: "document",
     qualityPreset: "balanced",
     debug: false,
