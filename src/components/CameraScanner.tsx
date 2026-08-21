@@ -23,6 +23,8 @@ import {
   ShieldCheck,
   Smartphone,
   ClipboardPaste,
+  Scan,
+  ScanLine,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { ScanMode, QuadPoints, ScannedPage, FilterMode, Point, DocumentQualityCheck, CardSideAnalysis } from "../types";
@@ -547,7 +549,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
             const p2 = curScreen.bottomRight;
             const p3 = curScreen.bottomLeft;
 
-            // 4. Render stabilized polygon overlay
+            // 4. Render stabilized polygon overlay (Adobe Scan Style)
             ctx.save();
             ctx.beginPath();
             ctx.moveTo(p0.x, p0.y);
@@ -556,64 +558,75 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
             ctx.lineTo(p3.x, p3.y);
             ctx.closePath();
 
-            if (trackResult.isReadyForCapture) {
+            const isReady = trackResult.isReadyForCapture;
+            const isStabilizing = trackResult.isDetected && trackResult.stabilityScore >= 50;
+            const isDetected = trackResult.isDetected;
+
+            if (isReady) {
               ctx.strokeStyle = "#10b981"; // Emerald green
               ctx.lineWidth = 3.5;
-              ctx.fillStyle = "rgba(16, 185, 129, 0.22)";
+              ctx.fillStyle = "rgba(16, 185, 129, 0.20)";
               ctx.shadowColor = "#10b981";
               ctx.shadowBlur = 16;
-            } else if (trackResult.isDetected && trackResult.stabilityScore >= 50) {
-              ctx.strokeStyle = "#06b6d4"; // Cyan
-              ctx.lineWidth = 2.8;
-              ctx.fillStyle = "rgba(6, 182, 212, 0.12)";
-              ctx.shadowColor = "#06b6d4";
-              ctx.shadowBlur = 10;
-            } else if (trackResult.isDetected) {
+            } else if (isStabilizing) {
+              ctx.strokeStyle = "#00d2ff"; // Adobe Scan Electric Cyan
+              ctx.lineWidth = 3.0;
+              ctx.fillStyle = "rgba(0, 210, 255, 0.12)";
+              ctx.shadowColor = "#00d2ff";
+              ctx.shadowBlur = 12;
+            } else if (isDetected) {
               ctx.strokeStyle = "#3b82f6"; // Primary Blue
-              ctx.lineWidth = 2.2;
+              ctx.lineWidth = 2.4;
               ctx.fillStyle = "rgba(59, 130, 246, 0.08)";
               ctx.shadowColor = "#3b82f6";
-              ctx.shadowBlur = 6;
+              ctx.shadowBlur = 8;
             } else {
-              ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
-              ctx.lineWidth = 1.5;
-              ctx.fillStyle = "rgba(255, 255, 255, 0.02)";
-              ctx.setLineDash([6, 6]);
+              ctx.strokeStyle = "rgba(255, 255, 255, 0.40)";
+              ctx.lineWidth = 1.6;
+              ctx.fillStyle = "rgba(255, 255, 255, 0.03)";
+              ctx.setLineDash([8, 8]);
             }
 
             ctx.fill();
             ctx.stroke();
             ctx.restore();
 
-            // 5. Draw 4 precision corner target brackets
-            const drawCornerAccent = (pt: Point, angleDeg: number) => {
+            // 5. Draw Adobe Scan-style 4 Glowing Corner Pins with Pulse Radar
+            const drawAdobeCorner = (pt: Point, angleDeg: number) => {
               ctx.save();
               ctx.translate(pt.x, pt.y);
 
-              // Outer target circle
+              // Outer pulsating glow ring
+              const pulseScale = (Math.sin(now * 0.008) + 1) * 0.5; // 0 to 1
+              const outerRadius = isReady ? 14 : isDetected ? 11 + pulseScale * 4 : 8;
+
               ctx.beginPath();
-              ctx.arc(0, 0, trackResult.isReadyForCapture ? 8 : 6, 0, Math.PI * 2);
-              ctx.fillStyle = trackResult.isReadyForCapture
-                ? "#10b981"
-                : trackResult.isDetected
-                ? "#3b82f6"
-                : "#ffffff";
+              ctx.arc(0, 0, outerRadius, 0, Math.PI * 2);
+              ctx.fillStyle = isReady
+                ? "rgba(16, 185, 129, 0.25)"
+                : isStabilizing
+                ? "rgba(0, 210, 255, 0.28)"
+                : isDetected
+                ? "rgba(59, 130, 246, 0.25)"
+                : "rgba(255, 255, 255, 0.15)";
+              ctx.fill();
+
+              // Inner solid pin circle
+              ctx.beginPath();
+              ctx.arc(0, 0, isReady ? 7 : 6, 0, Math.PI * 2);
+              ctx.fillStyle = isReady ? "#10b981" : isStabilizing ? "#00d2ff" : isDetected ? "#3b82f6" : "#ffffff";
               ctx.fill();
               ctx.lineWidth = 2;
               ctx.strokeStyle = "#ffffff";
               ctx.stroke();
 
-              // Precision Corner angle bracket
+              // Precision Corner angle bracket (Adobe Scan crosshair frame)
               ctx.rotate((angleDeg * Math.PI) / 180);
               ctx.beginPath();
-              ctx.moveTo(0, 20);
+              ctx.moveTo(0, 24);
               ctx.lineTo(0, 0);
-              ctx.lineTo(20, 0);
-              ctx.strokeStyle = trackResult.isReadyForCapture
-                ? "#10b981"
-                : trackResult.isDetected
-                ? "#60a5fa"
-                : "#ffffff";
+              ctx.lineTo(24, 0);
+              ctx.strokeStyle = isReady ? "#10b981" : isStabilizing ? "#00d2ff" : isDetected ? "#60a5fa" : "#ffffff";
               ctx.lineWidth = 3.5;
               ctx.lineCap = "round";
               ctx.stroke();
@@ -621,10 +634,10 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
               ctx.restore();
             };
 
-            drawCornerAccent(p0, 0);
-            drawCornerAccent(p1, 90);
-            drawCornerAccent(p2, 180);
-            drawCornerAccent(p3, 270);
+            drawAdobeCorner(p0, 0);
+            drawAdobeCorner(p1, 90);
+            drawAdobeCorner(p2, 180);
+            drawAdobeCorner(p3, 270);
 
             setDetectedQuad(trackResult.smoothedQuad || (detection?.isRealQuad ? detection.quad : null));
             setScreenQuad(curScreen);
@@ -924,9 +937,45 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           </div>
         )}
 
+        {/* Adobe Scan Real-time Guidance Pill */}
+        {scannerState !== "REVIEW" && (
+          <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 max-w-[90vw]">
+            <div
+              className={`flex items-center gap-2 px-4 py-2 rounded-full backdrop-blur-xl border shadow-xl text-xs font-semibold transition-all duration-200 ${
+                scannerState === "READY"
+                  ? "bg-emerald-950/90 text-emerald-300 border-emerald-500/80 shadow-emerald-950/50 scale-105"
+                  : scannerState === "STABILIZING"
+                  ? "bg-cyan-950/90 text-cyan-300 border-cyan-500/70 shadow-cyan-950/50"
+                  : isDetected
+                  ? "bg-blue-950/90 text-blue-300 border-blue-500/60 shadow-blue-950/50"
+                  : "bg-slate-950/85 text-slate-200 border-slate-700/60"
+              }`}
+            >
+              {scannerState === "READY" ? (
+                <Sparkles className="w-4 h-4 text-emerald-400 animate-spin" />
+              ) : scannerState === "STABILIZING" ? (
+                <div className="w-3.5 h-3.5 rounded-full border-2 border-cyan-400 border-t-transparent animate-spin" />
+              ) : isDetected ? (
+                <Scan className="w-4 h-4 text-blue-400" />
+              ) : (
+                <ScanLine className="w-4 h-4 text-slate-400 animate-pulse" />
+              )}
+              <span className="truncate">
+                {scannerState === "READY"
+                  ? "Đang tự động chụp..."
+                  : scannerState === "STABILIZING" && autoCapture
+                  ? `Giữ yên để chụp (${Math.min(100, Math.round((steadyCounter / 9) * 100))}%)`
+                  : isDetected
+                  ? "Đã thấy tài liệu • Giữ yên điện thoại"
+                  : guidance}
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* 2-Sided Card Guide Watermark */}
         {is2SidedCard && scannerState !== "REVIEW" && (
-          <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 px-4 py-1.5 rounded-full bg-indigo-950/85 backdrop-blur border border-indigo-700/60 text-xs font-semibold text-indigo-200 shadow-xl">
+          <div className="absolute top-28 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 px-4 py-1.5 rounded-full bg-indigo-950/85 backdrop-blur border border-indigo-700/60 text-xs font-semibold text-indigo-200 shadow-xl">
             <IdCard className="w-4 h-4 text-indigo-400" />
             <span>
               {cardSide === "front" ? "ĐANG CHỤP: MẶT TRƯỚC THẺ" : "ĐANG CHỤP: MẶT SAU THẺ"}
@@ -1196,26 +1245,53 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
               <ImageIcon className="w-5 h-5 text-slate-300" />
             </button>
 
-            {/* Main Shutter Button */}
+            {/* Main Shutter Button with Adobe Scan Circular Progress Countdown */}
             <button
               id="btn-camera-shutter"
               onClick={() => captureFrame()}
               disabled={scannerState === "CAPTURING"}
-              className="relative w-18 h-18 sm:w-20 sm:h-20 rounded-full bg-white flex items-center justify-center shadow-2xl active:scale-95 transition-transform"
-              title="Chụp ảnh ngay"
+              className="relative w-20 h-20 sm:w-22 sm:h-22 rounded-full flex items-center justify-center shadow-2xl active:scale-95 transition-transform group"
+              title={autoCapture ? "Tự động chụp khi giữ yên hoặc bấm để chụp ngay" : "Bấm để chụp ảnh"}
               aria-label="Chụp ảnh ngay"
             >
-              {/* Animated Ring when document is stabilized */}
+              {/* Outer SVG Auto-Capture Radial Progress Ring */}
+              <svg className="absolute inset-0 w-full h-full -rotate-90 pointer-events-none" viewBox="0 0 88 88">
+                {/* Background Track */}
+                <circle
+                  cx="44"
+                  cy="44"
+                  r="40"
+                  fill="none"
+                  stroke={autoCapture ? "rgba(255, 255, 255, 0.25)" : "rgba(255, 255, 255, 0.15)"}
+                  strokeWidth="3.5"
+                />
+                {/* Active Filling Progress Arc */}
+                {autoCapture && (
+                  <circle
+                    cx="44"
+                    cy="44"
+                    r="40"
+                    fill="none"
+                    stroke={scannerState === "READY" ? "#10b981" : "#00d2ff"}
+                    strokeWidth="4"
+                    strokeLinecap="round"
+                    strokeDasharray="251.3"
+                    strokeDashoffset={251.3 - (251.3 * Math.min(100, Math.max(0, (steadyCounter / 9) * 100))) / 100}
+                    className="transition-all duration-100 ease-linear"
+                  />
+                )}
+              </svg>
+
+              {/* Inner Camera Shutter Circle */}
               <div
-                className={`absolute -inset-1.5 rounded-full border-2 transition-colors duration-300 ${
+                className={`w-15 h-15 sm:w-16 sm:h-16 rounded-full flex items-center justify-center transition-all duration-200 ${
                   scannerState === "READY"
-                    ? "border-emerald-400 animate-pulse"
+                    ? "bg-emerald-500 text-slate-950 scale-105 shadow-lg shadow-emerald-500/50"
                     : scannerState === "STABILIZING"
-                    ? "border-blue-400"
-                    : "border-white/40"
+                    ? "bg-cyan-400 text-slate-950 shadow-md shadow-cyan-400/40"
+                    : "bg-white text-slate-950 group-hover:bg-slate-100"
                 }`}
-              />
-              <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-white border-2 border-slate-950 flex items-center justify-center">
+              >
                 <Camera className="w-6 h-6 text-slate-950" />
               </div>
             </button>

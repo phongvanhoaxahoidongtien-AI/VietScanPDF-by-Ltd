@@ -371,8 +371,55 @@ export class CVEngine {
       }
     }
 
-    // 7. Bright/Dark Background Threshold Fallback
-    if (!bestQuad || bestScore < 0.35) {
+    // 7. Multi-Method Fallback Solvers (Adobe Scan Style Multi-Strategy Pipeline)
+    // 7a. Otsu Bimodal Segmentation (White/Light Document on Table / Dark Document on Light Surface)
+    if (!bestQuad || bestScore < 0.45) {
+      const otsuQuad = this.findOtsuSegmentedQuad(blurred, workW, workH);
+      if (otsuQuad) {
+        const sortedOtsu = this.orderQuadPoints([
+          otsuQuad.topLeft,
+          otsuQuad.topRight,
+          otsuQuad.bottomRight,
+          otsuQuad.bottomLeft,
+        ]);
+        if (this.isValidConvexQuad(sortedOtsu, workW, workH)) {
+          const orthoScore = this.calculateOrthogonalityScore(sortedOtsu);
+          const edgeScore = this.evaluateEdgeGradientQuality(sortedOtsu, gradMagnitudes, workW, workH);
+          const contrastScore = this.evaluateBorderContrast(sortedOtsu, blurred, workW, workH);
+          const parallelScore = this.calculateParallelismScore(sortedOtsu);
+          const score = orthoScore * 0.3 + edgeScore * 0.3 + contrastScore * 0.25 + parallelScore * 0.15;
+          if (score > bestScore) {
+            bestScore = score;
+            bestQuad = sortedOtsu;
+          }
+        }
+      }
+    }
+
+    // 7b. Radial Ray Sweep Edge Detection (Detecting boundary steps from center outward)
+    if (!bestQuad || bestScore < 0.38) {
+      const radialQuad = this.findRadialEdgeQuad(blurred, gradMagnitudes, workW, workH);
+      if (radialQuad) {
+        const sortedRadial = this.orderQuadPoints([
+          radialQuad.topLeft,
+          radialQuad.topRight,
+          radialQuad.bottomRight,
+          radialQuad.bottomLeft,
+        ]);
+        if (this.isValidConvexQuad(sortedRadial, workW, workH)) {
+          const orthoScore = this.calculateOrthogonalityScore(sortedRadial);
+          const edgeScore = this.evaluateEdgeGradientQuality(sortedRadial, gradMagnitudes, workW, workH);
+          const score = orthoScore * 0.4 + edgeScore * 0.4 + 0.15;
+          if (score > bestScore) {
+            bestScore = score;
+            bestQuad = sortedRadial;
+          }
+        }
+      }
+    }
+
+    // 7c. Luminance Threshold & Projection Fallback
+    if (!bestQuad || bestScore < 0.32) {
       const brightQuad = this.findBrightDocumentRegionQuad(blurred, workW, workH, avgLuma);
       if (brightQuad) {
         const sortedBright = this.orderQuadPoints([
@@ -383,14 +430,23 @@ export class CVEngine {
         ]);
         if (this.isValidConvexQuad(sortedBright, workW, workH)) {
           bestQuad = sortedBright;
-          bestScore = Math.max(bestScore, 0.48);
+          bestScore = Math.max(bestScore, 0.46);
         }
+      }
+    }
+
+    // 7d. Smart High-Contrast Center-Guided Bounding Box Snap
+    if (!bestQuad || bestScore < 0.25) {
+      const snapQuad = this.findHighContrastBBoxQuad(gradMagnitudes, workW, workH, targetAspect);
+      if (snapQuad && this.isValidConvexQuad(snapQuad, workW, workH)) {
+        bestQuad = snapQuad;
+        bestScore = 0.38;
       }
     }
 
     // 8. Map coordinates back to full resolution
     const invScale = 1 / scale;
-    if (bestQuad && bestScore >= 0.26) {
+    if (bestQuad && bestScore >= 0.22) {
       const fullQuad: QuadPoints = {
         topLeft: {
           x: Math.max(0, Math.min(srcWidth, Math.round(bestQuad.topLeft.x * invScale))),
@@ -1127,6 +1183,227 @@ export class CVEngine {
       };
     }
     return null;
+  }
+
+  /**
+   * Otsu Bimodal Thresholding + Convex Hull Document Segmenter
+   * (Adobe Scan strategy for separating paper sheets from desk backgrounds)
+   */
+  private static findOtsuSegmentedQuad(
+    gray: Uint8Array,
+    w: number,
+    h: number
+  ): QuadPoints | null {
+    // 1. Calculate 256-bin histogram
+    const hist = new Int32Array(256);
+    const totalPixels = w * h;
+    for (let i = 0; i < totalPixels; i++) {
+      hist[gray[i]]++;
+    }
+
+    // 2. Otsu threshold calculation
+    let sum = 0;
+    for (let t = 0; t < 256; t++) sum += t * hist[t];
+
+    let sumB = 0;
+    let wB = 0;
+    let wF = 0;
+    let varMax = 0;
+    let threshold = 128;
+
+    for (let t = 0; t < 256; t++) {
+      wB += hist[t];
+      if (wB === 0) continue;
+      wF = totalPixels - wB;
+      if (wF === 0) break;
+
+      sumB += t * hist[t];
+      const mB = sumB / wB;
+      const mF = (sum - sumB) / wF;
+      const varBetween = wB * wF * (mB - mF) * (mB - mF);
+
+      if (varBetween > varMax) {
+        varMax = varBetween;
+        threshold = t;
+      }
+    }
+
+    // 3. Segment mask (paper is usually either lighter or darker than table)
+    const mask = new Uint8Array(totalPixels);
+    let countBright = 0;
+    for (let i = 0; i < totalPixels; i++) {
+      if (gray[i] > threshold) {
+        mask[i] = 1;
+        countBright++;
+      }
+    }
+
+    // If bright pixels occupy 20% to 85% of frame, paper is bright on dark desk
+    // If bright pixels occupy > 85%, paper might be dark on bright desk (invert)
+    const isBrightPaper = countBright > totalPixels * 0.15 && countBright < totalPixels * 0.85;
+    const targetVal = isBrightPaper ? 1 : 0;
+
+    // Collect boundary perimeter points
+    const points: Point[] = [];
+    const step = 3;
+    for (let y = 4; y < h - 4; y += step) {
+      const row = y * w;
+      for (let x = 4; x < w - 4; x += step) {
+        if (mask[row + x] === targetVal) {
+          // Check if it's on the boundary
+          if (
+            mask[row + x - 1] !== targetVal ||
+            mask[row + x + 1] !== targetVal ||
+            mask[row - w + x] !== targetVal ||
+            mask[row + w + x] !== targetVal
+          ) {
+            points.push({ x, y });
+          }
+        }
+      }
+    }
+
+    if (points.length < 24) return null;
+
+    const hull = this.convexHull(points);
+    if (hull.length < 4) return null;
+
+    const hullArea = this.polygonArea(hull);
+    if (hullArea < totalPixels * 0.14 || hullArea > totalPixels * 0.94) return null;
+
+    const candidate = this.extractExtremeCorners(hull);
+    return this.orderQuadPoints(candidate);
+  }
+
+  /**
+   * Radial Ray Boundary Sweep
+   * Casts 28 radial rays from center outward to find the 4 perimeter edges of the document
+   */
+  private static findRadialEdgeQuad(
+    gray: Uint8Array,
+    gradMag: Uint8Array,
+    w: number,
+    h: number
+  ): QuadPoints | null {
+    const cx = w / 2;
+    const cy = h / 2;
+    const rayCount = 28;
+    const maxR = Math.hypot(cx, cy);
+    const boundaryPoints: Point[] = [];
+
+    for (let i = 0; i < rayCount; i++) {
+      const angle = (i * 2 * Math.PI) / rayCount;
+      const cosA = Math.cos(angle);
+      const sinA = Math.sin(angle);
+
+      let maxEdge = 0;
+      let bestX = 0;
+      let bestY = 0;
+
+      // Walk along ray from center outward (starting at 15% out to avoid document interior text)
+      for (let r = Math.min(w, h) * 0.15; r < maxR; r += 2) {
+        const px = Math.round(cx + cosA * r);
+        const py = Math.round(cy + sinA * r);
+
+        if (px >= 2 && px < w - 2 && py >= 2 && py < h - 2) {
+          const mag = gradMag[py * w + px];
+          if (mag > maxEdge && mag > 18) {
+            maxEdge = mag;
+            bestX = px;
+            bestY = py;
+          }
+        } else {
+          break;
+        }
+      }
+
+      if (maxEdge > 20 && bestX > 0) {
+        boundaryPoints.push({ x: bestX, y: bestY });
+      }
+    }
+
+    if (boundaryPoints.length < 12) return null;
+
+    const hull = this.convexHull(boundaryPoints);
+    if (hull.length < 4) return null;
+
+    const area = this.polygonArea(hull);
+    if (area < w * h * 0.15 || area > w * h * 0.92) return null;
+
+    const candidate = this.extractExtremeCorners(hull);
+    return this.orderQuadPoints(candidate);
+  }
+
+  /**
+   * High-Contrast Bounding Box Snap
+   * Accumulates directional gradient projections to magnetically snap to document margins
+   */
+  private static findHighContrastBBoxQuad(
+    gradMag: Uint8Array,
+    w: number,
+    h: number,
+    targetAspect: "document" | "card"
+  ): QuadPoints | null {
+    const horizProj = new Int32Array(w);
+    const vertProj = new Int32Array(h);
+
+    const marginX = Math.round(w * 0.05);
+    const marginY = Math.round(h * 0.05);
+
+    for (let y = marginY; y < h - marginY; y++) {
+      const row = y * w;
+      for (let x = marginX; x < w - marginX; x++) {
+        const mag = gradMag[row + x];
+        if (mag > 15) {
+          horizProj[x] += mag;
+          vertProj[y] += mag;
+        }
+      }
+    }
+
+    // Find bounding intervals containing 85% of total gradient energy
+    let totalGradX = 0;
+    for (let x = marginX; x < w - marginX; x++) totalGradX += horizProj[x];
+    if (totalGradX < 200) return null;
+
+    let minX = marginX;
+    let maxX = w - marginX;
+    let accX = 0;
+    for (let x = marginX; x < w - marginX; x++) {
+      accX += horizProj[x];
+      if (accX > totalGradX * 0.08 && minX === marginX) minX = x;
+      if (accX > totalGradX * 0.92) {
+        maxX = x;
+        break;
+      }
+    }
+
+    let totalGradY = 0;
+    for (let y = marginY; y < h - marginY; y++) totalGradY += vertProj[y];
+    if (totalGradY < 200) return null;
+
+    let minY = marginY;
+    let maxY = h - marginY;
+    let accY = 0;
+    for (let y = marginY; y < h - marginY; y++) {
+      accY += vertProj[y];
+      if (accY > totalGradY * 0.08 && minY === marginY) minY = y;
+      if (accY > totalGradY * 0.92) {
+        maxY = y;
+        break;
+      }
+    }
+
+    const boxW = maxX - minX;
+    const boxH = maxY - minY;
+    if (boxW < w * 0.25 || boxH < h * 0.25) return null;
+
+    return {
+      topLeft: { x: minX, y: minY },
+      topRight: { x: maxX, y: minY },
+      bottomRight: { x: maxX, y: maxY },
+      bottomLeft: { x: minX, y: maxY },
+    };
   }
 
   /**

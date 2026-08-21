@@ -17,13 +17,13 @@ export interface TrackerConfig {
 }
 
 export const DEFAULT_TRACKER_CONFIG: TrackerConfig = {
-  historySize: 14,
-  minConfidenceHigh: 0.35, // Low entry barrier to lock onto document
-  minConfidenceLow: 0.18,  // Hysteresis low threshold to hold lock
-  minStabilityScoreForCapture: 70, // Higher stability threshold to prevent shaky captures
-  minConfidenceForCapture: 0.45,
-  requiredStableFrames: 18, // ~1.5 - 1.8s of deliberate steady camera hold before auto-capture
-  maxCornerDriftRatio: 0.032, // 3.2% of frame width
+  historySize: 12,
+  minConfidenceHigh: 0.28, // Responsive entry barrier to lock onto document fast (like Adobe Scan)
+  minConfidenceLow: 0.15,  // Hysteresis low threshold to hold lock smoothly
+  minStabilityScoreForCapture: 58, // Practical stability threshold
+  minConfidenceForCapture: 0.35,
+  requiredStableFrames: 9, // ~0.8s of holding still before auto-capture (Adobe Scan style)
+  maxCornerDriftRatio: 0.045, // 4.5% frame width tolerance for natural hand hold
 };
 
 /**
