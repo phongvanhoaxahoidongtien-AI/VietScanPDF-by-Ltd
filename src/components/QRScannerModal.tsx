@@ -19,6 +19,10 @@ import {
   Mail,
   AlertCircle,
   ShieldCheck,
+  ClipboardPaste,
+  Link as LinkIcon,
+  Loader2,
+  X,
 } from "lucide-react";
 import jsQR from "jsqr";
 
@@ -71,6 +75,13 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({ onClose }) => {
   const [parsedWifi, setParsedWifi] = useState<ParsedWifi | null>(null);
   const [parsedVCard, setParsedVCard] = useState<ParsedVCard | null>(null);
   const [copied, setCopied] = useState(false);
+
+  // Link & Clipboard input modal state
+  const [isUrlModalOpen, setIsUrlModalOpen] = useState<boolean>(false);
+  const [inputUrl, setInputUrl] = useState<string>("");
+  const [isLoadingUrl, setIsLoadingUrl] = useState<boolean>(false);
+  const [urlError, setUrlError] = useState<string | null>(null);
+  const [pasteToast, setPasteToast] = useState<string | null>(null);
 
   // Sound and Haptic feedback
   const triggerScanFeedback = () => {
@@ -313,7 +324,45 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({ onClose }) => {
     }
   };
 
-  // Decode QR from uploaded image
+  // Core QR decode from any loaded HTMLImageElement
+  const decodeImageElement = (img: HTMLImageElement): boolean => {
+    try {
+      const c = document.createElement("canvas");
+      // Scale down extra huge images to avoid memory spikes
+      const maxDim = 1200;
+      let w = img.naturalWidth || img.width;
+      let h = img.naturalHeight || img.height;
+      if (w > maxDim || h > maxDim) {
+        if (w > h) {
+          h = Math.round((h * maxDim) / w);
+          w = maxDim;
+        } else {
+          w = Math.round((w * maxDim) / h);
+          h = maxDim;
+        }
+      }
+      c.width = w;
+      c.height = h;
+      const ctx = c.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return false;
+      ctx.drawImage(img, 0, 0, w, h);
+      const imgData = ctx.getImageData(0, 0, w, h);
+      const qrCode = jsQR(imgData.data, w, h, {
+        inversionAttempts: "attemptBoth",
+      });
+
+      if (qrCode && qrCode.data && qrCode.data.trim()) {
+        handleQRDecoded(qrCode.data);
+        return true;
+      }
+      return false;
+    } catch (e) {
+      console.error("Decode error:", e);
+      return false;
+    }
+  };
+
+  // Decode QR from uploaded image file
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -324,20 +373,8 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({ onClose }) => {
       const dataUrl = ev.target?.result as string;
       const img = new Image();
       img.onload = () => {
-        const c = document.createElement("canvas");
-        c.width = img.naturalWidth;
-        c.height = img.naturalHeight;
-        const ctx = c.getContext("2d", { willReadFrequently: true });
-        if (!ctx) return;
-        ctx.drawImage(img, 0, 0);
-        const imgData = ctx.getImageData(0, 0, c.width, c.height);
-        const qrCode = jsQR(imgData.data, c.width, c.height, {
-          inversionAttempts: "attemptBoth",
-        });
-
-        if (qrCode && qrCode.data && qrCode.data.trim()) {
-          handleQRDecoded(qrCode.data);
-        } else {
+        const success = decodeImageElement(img);
+        if (!success) {
           alert("Không tìm thấy mã QR trong ảnh vừa chọn. Vui lòng chọn ảnh rõ nét hơn.");
         }
       };
@@ -347,6 +384,139 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({ onClose }) => {
 
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
+
+  // Decode QR from image URL
+  const handleDecodeFromUrl = async (urlToFetch?: string) => {
+    const targetUrl = (urlToFetch || inputUrl).trim();
+    if (!targetUrl) {
+      setUrlError("Vui lòng nhập đường dẫn liên kết hình ảnh.");
+      return;
+    }
+
+    setIsLoadingUrl(true);
+    setUrlError(null);
+
+    try {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error("Không thể tải hình ảnh từ liên kết này. Vui lòng kiểm tra lại link hoặc quyền truy cập."));
+        img.src = targetUrl;
+      });
+
+      const success = decodeImageElement(img);
+      if (success) {
+        setIsUrlModalOpen(false);
+        setInputUrl("");
+      } else {
+        setUrlError("Đã tải được ảnh nhưng không tìm thấy mã QR bên trong. Hãy thử một liên kết ảnh khác rõ nét hơn.");
+      }
+    } catch (err: any) {
+      setUrlError(err.message || "Lỗi tải ảnh từ liên kết. Hãy thử copy ảnh và Dán trực tiếp.");
+    } finally {
+      setIsLoadingUrl(false);
+    }
+  };
+
+  // Paste image from system clipboard (Desktop / Mobile)
+  const handlePasteFromClipboard = async () => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.read) {
+        const items = await navigator.clipboard.read();
+        for (const item of items) {
+          const imageType = item.types.find((t) => t.startsWith("image/"));
+          if (imageType) {
+            const blob = await item.getType(imageType);
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+              const dataUrl = ev.target?.result as string;
+              const img = new Image();
+              img.onload = () => {
+                const ok = decodeImageElement(img);
+                if (!ok) {
+                  showToast("Không tìm thấy mã QR trong ảnh vừa dán.");
+                } else {
+                  showToast("Đã đọc thành công mã QR từ bộ nhớ tạm!");
+                }
+              };
+              img.src = dataUrl;
+            };
+            reader.readAsDataURL(blob);
+            return;
+          }
+        }
+      }
+
+      // Check if text in clipboard is an image URL
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        const text = (await navigator.clipboard.readText()).trim();
+        if (text) {
+          if (text.startsWith("http://") || text.startsWith("https://") || text.startsWith("data:image/")) {
+            handleDecodeFromUrl(text);
+            return;
+          }
+        }
+      }
+
+      showToast("Bộ nhớ tạm chưa có ảnh. Bạn hãy sao chép một hình ảnh mã QR rồi bấm Dán lại (hoặc nhấn Ctrl+V / Cmd+V).");
+    } catch (e: any) {
+      console.warn("Clipboard read error:", e);
+      showToast("Vui lòng nhấn tổ hợp phím Ctrl+V (hoặc Cmd+V) để dán ảnh trực tiếp.");
+    }
+  };
+
+  const showToast = (msg: string) => {
+    setPasteToast(msg);
+    setTimeout(() => setPasteToast(null), 3500);
+  };
+
+  // Global paste event listener
+  useEffect(() => {
+    const handleWindowPaste = (e: ClipboardEvent) => {
+      if (!isScanning) return;
+      if (!e.clipboardData) return;
+
+      const items = e.clipboardData.items;
+      let handled = false;
+
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf("image") !== -1) {
+          const blob = items[i].getAsFile();
+          if (blob) {
+            handled = true;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+              const url = ev.target?.result as string;
+              const img = new Image();
+              img.onload = () => {
+                const success = decodeImageElement(img);
+                if (success) {
+                  showToast("Đã đọc thành công mã QR từ ảnh vừa dán!");
+                } else {
+                  showToast("Không tìm thấy mã QR trong ảnh vừa dán.");
+                }
+              };
+              img.src = url;
+            };
+            reader.readAsDataURL(blob);
+            break;
+          }
+        }
+      }
+
+      if (!handled) {
+        const pastedText = e.clipboardData.getData("text").trim();
+        if (pastedText.startsWith("http://") || pastedText.startsWith("https://") || pastedText.startsWith("data:image/")) {
+          handleDecodeFromUrl(pastedText);
+        }
+      }
+    };
+
+    window.addEventListener("paste", handleWindowPaste);
+    return () => window.removeEventListener("paste", handleWindowPaste);
+  }, [isScanning]);
 
   // Reset to continue scanning
   const handleScanAgain = () => {
@@ -424,15 +594,46 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({ onClose }) => {
           )}
 
           <button
+            id="btn-qr-paste-clip"
+            onClick={handlePasteFromClipboard}
+            title="Dán ảnh từ bộ nhớ tạm (Ctrl+V)"
+            className="flex items-center gap-1 px-2.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-750 text-slate-200 text-xs font-semibold active:scale-95 transition border border-slate-700/60"
+          >
+            <ClipboardPaste className="w-4 h-4 text-emerald-400" />
+            <span className="hidden sm:inline">Dán ảnh</span>
+          </button>
+
+          <button
+            id="btn-qr-url-link"
+            onClick={() => {
+              setUrlError(null);
+              setIsUrlModalOpen(true);
+            }}
+            title="Nhập ảnh từ link"
+            className="flex items-center gap-1 px-2.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-750 text-slate-200 text-xs font-semibold active:scale-95 transition border border-slate-700/60"
+          >
+            <LinkIcon className="w-4 h-4 text-sky-400" />
+            <span className="hidden sm:inline">Từ Link</span>
+          </button>
+
+          <button
             id="btn-qr-import-image"
             onClick={() => fileInputRef.current?.click()}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-750 text-slate-200 text-xs font-semibold active:scale-95 transition"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold active:scale-95 transition shadow-sm"
           >
-            <ImageIcon className="w-4 h-4 text-amber-400" />
+            <ImageIcon className="w-4 h-4 text-white" />
             <span>Chọn ảnh</span>
           </button>
         </div>
       </div>
+
+      {/* Toast Alert */}
+      {pasteToast && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-slate-900/95 border border-blue-500/50 text-white text-xs font-medium shadow-2xl backdrop-blur-md animate-fade-in flex items-center gap-2">
+          <ShieldCheck className="w-4 h-4 text-blue-400 shrink-0" />
+          <span>{pasteToast}</span>
+        </div>
+      )}
 
       {/* Camera Live Viewfinder when scanning */}
       {isScanning ? (
@@ -451,12 +652,20 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({ onClose }) => {
               <AlertCircle className="w-12 h-12 text-rose-500 mb-3" />
               <h3 className="text-base font-bold text-white mb-1">Lỗi Máy Ảnh</h3>
               <p className="text-xs text-slate-400 max-w-sm mb-4">{cameraError}</p>
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs"
-              >
-                Chọn ảnh mã QR từ máy
-              </button>
+              <div className="flex flex-wrap gap-2 justify-center">
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs"
+                >
+                  Chọn ảnh từ máy
+                </button>
+                <button
+                  onClick={handlePasteFromClipboard}
+                  className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs"
+                >
+                  Dán ảnh (Clipboard)
+                </button>
+              </div>
             </div>
           )}
 
@@ -477,6 +686,27 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({ onClose }) => {
             <p className="text-xs font-semibold text-white/90 bg-slate-900/80 backdrop-blur-md px-4 py-1.5 rounded-full border border-slate-700 mt-6 shadow-lg">
               Hướng camera vào mã QR hoặc mã CCCD
             </p>
+
+            {/* Quick action floating pills on mobile */}
+            <div className="pointer-events-auto flex items-center gap-2 mt-4">
+              <button
+                onClick={handlePasteFromClipboard}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-900/90 hover:bg-slate-800 border border-emerald-500/40 text-emerald-400 text-xs font-semibold backdrop-blur-md active:scale-95 transition shadow-lg"
+              >
+                <ClipboardPaste className="w-3.5 h-3.5" />
+                <span>Dán từ bộ nhớ tạm</span>
+              </button>
+              <button
+                onClick={() => {
+                  setUrlError(null);
+                  setIsUrlModalOpen(true);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-900/90 hover:bg-slate-800 border border-sky-500/40 text-sky-400 text-xs font-semibold backdrop-blur-md active:scale-95 transition shadow-lg"
+              >
+                <LinkIcon className="w-3.5 h-3.5" />
+                <span>Nhập link ảnh</span>
+              </button>
+            </div>
           </div>
         </div>
       ) : (
@@ -715,6 +945,92 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({ onClose }) => {
               >
                 <RefreshCw className="w-4 h-4" />
                 <span>Tiếp tục quét mã khác</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* URL Link Input Modal */}
+      {isUrlModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-sky-500/20 text-sky-400 flex items-center justify-center font-bold">
+                  <LinkIcon className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Quét Mã QR từ Link ảnh</h3>
+                  <p className="text-[11px] text-slate-400">Dán đường dẫn ảnh chứa mã QR trên mạng</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsUrlModalOpen(false)}
+                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <div className="relative">
+                <input
+                  type="url"
+                  placeholder="https://example.com/qr-code.png"
+                  value={inputUrl}
+                  onChange={(e) => setInputUrl(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleDecodeFromUrl();
+                  }}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 pr-20"
+                />
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      const text = await navigator.clipboard.readText();
+                      if (text) setInputUrl(text.trim());
+                    } catch (e) {
+                      // Ignored
+                    }
+                  }}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-[10px] text-slate-300 font-semibold active:scale-95 transition"
+                >
+                  Dán link
+                </button>
+              </div>
+
+              {urlError && (
+                <div className="flex items-start gap-1.5 text-[11px] text-rose-400 bg-rose-500/10 border border-rose-500/20 p-2.5 rounded-xl">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  <span>{urlError}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setIsUrlModalOpen(false)}
+                className="flex-1 py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-300 text-xs font-semibold"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                disabled={isLoadingUrl || !inputUrl.trim()}
+                onClick={() => handleDecodeFromUrl()}
+                className="flex-1 py-2.5 px-3 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-md shadow-sky-600/20"
+              >
+                {isLoadingUrl ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Đang tải...</span>
+                  </>
+                ) : (
+                  <span>Tải & Quét QR</span>
+                )}
               </button>
             </div>
           </div>

@@ -87,6 +87,13 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
   const [reviewingPage, setReviewingPage] = useState<ScannedPage | null>(null);
   const [isAdjustingCrop, setIsAdjustingCrop] = useState<boolean>(false);
 
+  // Search assistance & Thermal optimization refs
+  const [showSearchHint, setShowSearchHint] = useState<boolean>(false);
+  const searchStartTimeRef = useRef<number>(Date.now());
+  const lastCvDetectTimeRef = useRef<number>(0);
+  const lastTrackResultRef = useRef<any>(null);
+  const lastDetectionRef = useRef<any>(null);
+
   // Document Tracker Instance
   const trackerRef = useRef<DocumentTracker>(new DocumentTracker());
   const isCapturingRef = useRef<boolean>(false);
@@ -132,6 +139,8 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
       }
 
       setScannerState("SEARCHING");
+      searchStartTimeRef.current = Date.now();
+      setShowSearchHint(false);
       setGuidance("Đưa tài liệu vào khung hình");
     } catch (err: any) {
       console.error("Camera access error:", err);
@@ -145,6 +154,23 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
       setScannerState("INITIALIZING");
     }
   }, []);
+
+  // Full restart for media sensor and CV tracker
+  const restartCameraStream = useCallback(async () => {
+    trackerRef.current.unlock();
+    trackerRef.current.reset(0);
+    lastCvDetectTimeRef.current = 0;
+    lastTrackResultRef.current = null;
+    lastDetectionRef.current = null;
+    searchStartTimeRef.current = Date.now();
+    setShowSearchHint(false);
+    setDetectedQuad(null);
+    setIsDetected(false);
+    setSteadyCounter(0);
+    setStabilityScore(0);
+    setConfidenceScore(0);
+    await startCamera();
+  }, [startCamera]);
 
   useEffect(() => {
     startCamera();
@@ -163,6 +189,11 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
   // Reset tracker on mode or cardSide change
   useEffect(() => {
     trackerRef.current.reset();
+    lastCvDetectTimeRef.current = 0;
+    lastTrackResultRef.current = null;
+    lastDetectionRef.current = null;
+    searchStartTimeRef.current = Date.now();
+    setShowSearchHint(false);
     setSteadyCounter(0);
     setStabilityScore(0);
     setConfidenceScore(0);
@@ -226,8 +257,8 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
       setIsFlashing(true);
       triggerCaptureFeedback();
 
-      // Increased flash / shutter animation duration (doubled for clear tactile feedback)
-      setTimeout(() => setIsFlashing(false), 320);
+      // Increased flash / shutter animation duration (doubled to 640ms for clear visual and tactile feedback)
+      setTimeout(() => setIsFlashing(false), 640);
 
       const video = videoRef.current;
       const vw = video.videoWidth || 1280;
@@ -320,7 +351,11 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         setCardSide("back");
         setGuidance("Lật sang MẶT SAU của thẻ");
         setScannerState("SEARCHING");
-        trackerRef.current.reset(1500);
+        trackerRef.current.unlock();
+        trackerRef.current.reset(1200);
+        lastCvDetectTimeRef.current = 0;
+        searchStartTimeRef.current = Date.now();
+        setShowSearchHint(false);
         setSteadyCounter(0);
         return;
       } else {
@@ -334,19 +369,36 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     onCapturePage(pageToSave, finishImmediately);
     if (!finishImmediately) {
       setScannerState("SEARCHING");
-      trackerRef.current.reset(1200);
+      trackerRef.current.unlock();
+      trackerRef.current.reset(1000);
+      lastCvDetectTimeRef.current = 0;
+      searchStartTimeRef.current = Date.now();
+      setShowSearchHint(false);
       setSteadyCounter(0);
       setGuidance("Đưa trang tiếp theo vào khung hình");
     }
   };
 
-  // Discard current page and retake immediately
+  // Discard current page and retake immediately (Fixed full reset of CV tracker)
   const handleRetakeCurrentPage = () => {
     setReviewingPage(null);
     setIsAdjustingCrop(false);
+    isCapturingRef.current = false;
     setScannerState("SEARCHING");
-    trackerRef.current.reset(600);
+    trackerRef.current.unlock();
+    trackerRef.current.reset(0);
+    lastCvDetectTimeRef.current = 0;
+    lastTrackResultRef.current = null;
+    lastDetectionRef.current = null;
+    setDetectedQuad(null);
+    setLatestQuality(null);
+    setLatestCardSide(null);
     setSteadyCounter(0);
+    setStabilityScore(0);
+    setConfidenceScore(0);
+    setIsDetected(false);
+    searchStartTimeRef.current = Date.now();
+    setShowSearchHint(false);
     setGuidance("Căn chỉnh lại tài liệu để chụp lại");
   };
 
@@ -369,7 +421,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     setIsAdjustingCrop(false);
   };
 
-  // Real-time detection & 4-corner polygon tracking loop with Temporal Filter
+  // Real-time detection & 4-corner polygon tracking loop with Temporal Filter & Thermal Optimization
   useEffect(() => {
     const processFrame = () => {
       const video = videoRef.current;
@@ -397,177 +449,200 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           }
 
           const targetAspect = mode === "cccd" || mode === "driver_license" ? "card" : "document";
+          const now = performance.now();
+          const shouldRunDetection = (now - lastCvDetectTimeRef.current >= 85) || !lastTrackResultRef.current;
 
-          // 1. Raw Edge & Contour Detection
-          const detection = CVEngine.detectDocumentQuad(
-            video,
-            video.videoWidth,
-            video.videoHeight,
-            targetAspect
-          );
+          let detection = lastDetectionRef.current;
+          let trackResult = lastTrackResultRef.current;
 
-          setLatestQuality(detection.quality || null);
-          setLatestCardSide(detection.cardSide || null);
+          if (shouldRunDetection) {
+            lastCvDetectTimeRef.current = now;
 
-          // 2. Tracking & Temporal Smoothing via DocumentTracker
-          const trackResult = trackerRef.current.update(
-            detection.isRealQuad ? detection.quad : null,
-            detection.confidence,
-            video.videoWidth,
-            video.videoHeight,
-            detection.quality,
-            detection.cardSide,
-            mode === "cccd" || mode === "driver_license" ? cardSide : undefined
-          );
+            // 1. Raw Edge & Contour Detection (Run at optimized ~11-12 FPS to eliminate overheating)
+            detection = CVEngine.detectDocumentQuad(
+              video,
+              video.videoWidth,
+              video.videoHeight,
+              targetAspect
+            );
+            lastDetectionRef.current = detection;
 
-          setIsDetected(trackResult.isDetected);
-          setStabilityScore(trackResult.stabilityScore);
-          setConfidenceScore(Math.round(trackResult.confidence * 100));
-          setSteadyCounter(trackResult.stableFrames);
+            setLatestQuality(detection.quality || null);
+            setLatestCardSide(detection.cardSide || null);
 
-          // Update State Machine
-          if (trackResult.isReadyForCapture) {
-            setScannerState("READY");
-          } else if (trackResult.isDetected && trackResult.stabilityScore >= 50) {
-            setScannerState("STABILIZING");
-          } else if (trackResult.isDetected) {
-            setScannerState("DETECTING");
-          } else {
-            setScannerState("SEARCHING");
+            // 2. Tracking & Temporal Smoothing via DocumentTracker
+            trackResult = trackerRef.current.update(
+              detection.isRealQuad ? detection.quad : null,
+              detection.confidence,
+              video.videoWidth,
+              video.videoHeight,
+              detection.quality,
+              detection.cardSide,
+              mode === "cccd" || mode === "driver_license" ? cardSide : undefined
+            );
+            lastTrackResultRef.current = trackResult;
+
+            setIsDetected(trackResult.isDetected);
+            setStabilityScore(trackResult.stabilityScore);
+            setConfidenceScore(Math.round(trackResult.confidence * 100));
+            setSteadyCounter(trackResult.stableFrames);
+
+            // Long search hint logic (>7.5s without real detection)
+            if (trackResult.isDetected) {
+              searchStartTimeRef.current = Date.now();
+              setShowSearchHint(false);
+            } else {
+              if (Date.now() - searchStartTimeRef.current > 7500) {
+                setShowSearchHint(true);
+              }
+            }
+
+            // Update State Machine
+            if (trackResult.isReadyForCapture) {
+              setScannerState("READY");
+            } else if (trackResult.isDetected && trackResult.stabilityScore >= 50) {
+              setScannerState("STABILIZING");
+            } else if (trackResult.isDetected) {
+              setScannerState("DETECTING");
+            } else {
+              setScannerState("SEARCHING");
+            }
           }
 
-          // 3. Coordinate mapping from video space to screen space
-          const scaleX = vw / (video.videoWidth || 1);
-          const scaleY = vh / (video.videoHeight || 1);
+          if (trackResult) {
+            // 3. Coordinate mapping from video space to screen space
+            const scaleX = vw / (video.videoWidth || 1);
+            const scaleY = vh / (video.videoHeight || 1);
 
-          let curScreen: QuadPoints;
-          if (trackResult.smoothedQuad) {
-            curScreen = {
-              topLeft: {
-                x: trackResult.smoothedQuad.topLeft.x * scaleX,
-                y: trackResult.smoothedQuad.topLeft.y * scaleY,
-              },
-              topRight: {
-                x: trackResult.smoothedQuad.topRight.x * scaleX,
-                y: trackResult.smoothedQuad.topRight.y * scaleY,
-              },
-              bottomRight: {
-                x: trackResult.smoothedQuad.bottomRight.x * scaleX,
-                y: trackResult.smoothedQuad.bottomRight.y * scaleY,
-              },
-              bottomLeft: {
-                x: trackResult.smoothedQuad.bottomLeft.x * scaleX,
-                y: trackResult.smoothedQuad.bottomLeft.y * scaleY,
-              },
-            };
-          } else {
-            const defQ = CVEngine.getDefaultQuad(video.videoWidth, video.videoHeight, targetAspect);
-            curScreen = {
-              topLeft: { x: defQ.topLeft.x * scaleX, y: defQ.topLeft.y * scaleY },
-              topRight: { x: defQ.topRight.x * scaleX, y: defQ.topRight.y * scaleY },
-              bottomRight: { x: defQ.bottomRight.x * scaleX, y: defQ.bottomRight.y * scaleY },
-              bottomLeft: { x: defQ.bottomLeft.x * scaleX, y: defQ.bottomLeft.y * scaleY },
-            };
-          }
+            let curScreen: QuadPoints;
+            if (trackResult.smoothedQuad) {
+              curScreen = {
+                topLeft: {
+                  x: trackResult.smoothedQuad.topLeft.x * scaleX,
+                  y: trackResult.smoothedQuad.topLeft.y * scaleY,
+                },
+                topRight: {
+                  x: trackResult.smoothedQuad.topRight.x * scaleX,
+                  y: trackResult.smoothedQuad.topRight.y * scaleY,
+                },
+                bottomRight: {
+                  x: trackResult.smoothedQuad.bottomRight.x * scaleX,
+                  y: trackResult.smoothedQuad.bottomRight.y * scaleY,
+                },
+                bottomLeft: {
+                  x: trackResult.smoothedQuad.bottomLeft.x * scaleX,
+                  y: trackResult.smoothedQuad.bottomLeft.y * scaleY,
+                },
+              };
+            } else {
+              const defQ = CVEngine.getDefaultQuad(video.videoWidth, video.videoHeight, targetAspect);
+              curScreen = {
+                topLeft: { x: defQ.topLeft.x * scaleX, y: defQ.topLeft.y * scaleY },
+                topRight: { x: defQ.topRight.x * scaleX, y: defQ.topRight.y * scaleY },
+                bottomRight: { x: defQ.bottomRight.x * scaleX, y: defQ.bottomRight.y * scaleY },
+                bottomLeft: { x: defQ.bottomLeft.x * scaleX, y: defQ.bottomLeft.y * scaleY },
+              };
+            }
 
-          const p0 = curScreen.topLeft;
-          const p1 = curScreen.topRight;
-          const p2 = curScreen.bottomRight;
-          const p3 = curScreen.bottomLeft;
+            const p0 = curScreen.topLeft;
+            const p1 = curScreen.topRight;
+            const p2 = curScreen.bottomRight;
+            const p3 = curScreen.bottomLeft;
 
-          // 4. Render stabilized polygon overlay
-          ctx.save();
-          ctx.beginPath();
-          ctx.moveTo(p0.x, p0.y);
-          ctx.lineTo(p1.x, p1.y);
-          ctx.lineTo(p2.x, p2.y);
-          ctx.lineTo(p3.x, p3.y);
-          ctx.closePath();
-
-          if (trackResult.isReadyForCapture) {
-            ctx.strokeStyle = "#10b981"; // Emerald green
-            ctx.lineWidth = 3.5;
-            ctx.fillStyle = "rgba(16, 185, 129, 0.22)";
-            ctx.shadowColor = "#10b981";
-            ctx.shadowBlur = 16;
-          } else if (trackResult.isDetected && trackResult.stabilityScore >= 50) {
-            ctx.strokeStyle = "#06b6d4"; // Cyan
-            ctx.lineWidth = 2.8;
-            ctx.fillStyle = "rgba(6, 182, 212, 0.12)";
-            ctx.shadowColor = "#06b6d4";
-            ctx.shadowBlur = 10;
-          } else if (trackResult.isDetected) {
-            ctx.strokeStyle = "#3b82f6"; // Primary Blue
-            ctx.lineWidth = 2.2;
-            ctx.fillStyle = "rgba(59, 130, 246, 0.08)";
-            ctx.shadowColor = "#3b82f6";
-            ctx.shadowBlur = 6;
-          } else {
-            ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
-            ctx.lineWidth = 1.5;
-            ctx.fillStyle = "rgba(255, 255, 255, 0.02)";
-            ctx.setLineDash([6, 6]);
-          }
-
-          ctx.fill();
-          ctx.stroke();
-          ctx.restore();
-
-          // 5. Draw 4 precision corner target brackets
-          const drawCornerAccent = (pt: Point, angleDeg: number) => {
+            // 4. Render stabilized polygon overlay
             ctx.save();
-            ctx.translate(pt.x, pt.y);
-
-            // Outer target circle
             ctx.beginPath();
-            ctx.arc(0, 0, trackResult.isReadyForCapture ? 8 : 6, 0, Math.PI * 2);
-            ctx.fillStyle = trackResult.isReadyForCapture
-              ? "#10b981"
-              : trackResult.isDetected
-              ? "#3b82f6"
-              : "#ffffff";
+            ctx.moveTo(p0.x, p0.y);
+            ctx.lineTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.lineTo(p3.x, p3.y);
+            ctx.closePath();
+
+            if (trackResult.isReadyForCapture) {
+              ctx.strokeStyle = "#10b981"; // Emerald green
+              ctx.lineWidth = 3.5;
+              ctx.fillStyle = "rgba(16, 185, 129, 0.22)";
+              ctx.shadowColor = "#10b981";
+              ctx.shadowBlur = 16;
+            } else if (trackResult.isDetected && trackResult.stabilityScore >= 50) {
+              ctx.strokeStyle = "#06b6d4"; // Cyan
+              ctx.lineWidth = 2.8;
+              ctx.fillStyle = "rgba(6, 182, 212, 0.12)";
+              ctx.shadowColor = "#06b6d4";
+              ctx.shadowBlur = 10;
+            } else if (trackResult.isDetected) {
+              ctx.strokeStyle = "#3b82f6"; // Primary Blue
+              ctx.lineWidth = 2.2;
+              ctx.fillStyle = "rgba(59, 130, 246, 0.08)";
+              ctx.shadowColor = "#3b82f6";
+              ctx.shadowBlur = 6;
+            } else {
+              ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
+              ctx.lineWidth = 1.5;
+              ctx.fillStyle = "rgba(255, 255, 255, 0.02)";
+              ctx.setLineDash([6, 6]);
+            }
+
             ctx.fill();
-            ctx.lineWidth = 2;
-            ctx.strokeStyle = "#ffffff";
             ctx.stroke();
-
-            // Precision Corner angle bracket
-            ctx.rotate((angleDeg * Math.PI) / 180);
-            ctx.beginPath();
-            ctx.moveTo(0, 20);
-            ctx.lineTo(0, 0);
-            ctx.lineTo(20, 0);
-            ctx.strokeStyle = trackResult.isReadyForCapture
-              ? "#10b981"
-              : trackResult.isDetected
-              ? "#60a5fa"
-              : "#ffffff";
-            ctx.lineWidth = 3.5;
-            ctx.lineCap = "round";
-            ctx.stroke();
-
             ctx.restore();
-          };
 
-          drawCornerAccent(p0, 0);
-          drawCornerAccent(p1, 90);
-          drawCornerAccent(p2, 180);
-          drawCornerAccent(p3, 270);
+            // 5. Draw 4 precision corner target brackets
+            const drawCornerAccent = (pt: Point, angleDeg: number) => {
+              ctx.save();
+              ctx.translate(pt.x, pt.y);
 
-          setDetectedQuad(trackResult.smoothedQuad || (detection.isRealQuad ? detection.quad : null));
-          setScreenQuad(curScreen);
+              // Outer target circle
+              ctx.beginPath();
+              ctx.arc(0, 0, trackResult.isReadyForCapture ? 8 : 6, 0, Math.PI * 2);
+              ctx.fillStyle = trackResult.isReadyForCapture
+                ? "#10b981"
+                : trackResult.isDetected
+                ? "#3b82f6"
+                : "#ffffff";
+              ctx.fill();
+              ctx.lineWidth = 2;
+              ctx.strokeStyle = "#ffffff";
+              ctx.stroke();
 
-          // 6. Update Guidance Message
-          setGuidance(trackResult.guidance);
+              // Precision Corner angle bracket
+              ctx.rotate((angleDeg * Math.PI) / 180);
+              ctx.beginPath();
+              ctx.moveTo(0, 20);
+              ctx.lineTo(0, 0);
+              ctx.lineTo(20, 0);
+              ctx.strokeStyle = trackResult.isReadyForCapture
+                ? "#10b981"
+                : trackResult.isDetected
+                ? "#60a5fa"
+                : "#ffffff";
+              ctx.lineWidth = 3.5;
+              ctx.lineCap = "round";
+              ctx.stroke();
 
-          // 7. Auto Capture Triggering (Strictly when isReadyForCapture === true)
-          if (
-            autoCapture &&
-            trackResult.isReadyForCapture &&
-            !isCapturingRef.current &&
-            currentScannerStateRef.current !== "REVIEW"
-          ) {
-            captureFrame(trackResult.smoothedQuad || undefined);
+              ctx.restore();
+            };
+
+            drawCornerAccent(p0, 0);
+            drawCornerAccent(p1, 90);
+            drawCornerAccent(p2, 180);
+            drawCornerAccent(p3, 270);
+
+            setDetectedQuad(trackResult.smoothedQuad || (detection?.isRealQuad ? detection.quad : null));
+            setScreenQuad(curScreen);
+
+            // 6. Update Guidance Message
+            setGuidance(trackResult.guidance);
+
+            // 7. Auto Capture Triggering (Strictly when isReadyForCapture === true)
+            if (
+              autoCapture &&
+              trackResult.isReadyForCapture &&
+              !isCapturingRef.current &&
+              currentScannerStateRef.current !== "REVIEW"
+            ) {
+              captureFrame(trackResult.smoothedQuad || undefined);
+            }
           }
         }
       }
@@ -651,9 +726,9 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
 
   return (
     <div className="fixed inset-0 z-40 flex flex-col bg-black text-white select-none h-screen min-h-screen w-full overflow-hidden">
-      {/* Visual Shutter Flash Effect */}
+      {/* Visual Shutter Flash Effect (Doubled duration for clear feedback) */}
       {isFlashing && (
-        <div className="absolute inset-0 z-50 bg-white opacity-85 pointer-events-none transition-opacity duration-300 animate-pulse" />
+        <div className="absolute inset-0 z-50 bg-white opacity-95 pointer-events-none transition-opacity duration-500" />
       )}
 
       {/* Duplicate Page / Side Warning Toast */}
@@ -795,6 +870,38 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
             <span>
               {cardSide === "front" ? "ĐANG CHỤP: MẶT TRƯỚC THẺ" : "ĐANG CHỤP: MẶT SAU THẺ"}
             </span>
+          </div>
+        )}
+
+        {/* Subtle Assistant Alert Banner if detection takes too long */}
+        {showSearchHint && scannerState !== "REVIEW" && !isDetected && (
+          <div className="absolute bottom-6 inset-x-4 max-w-sm mx-auto z-20 p-3 rounded-2xl bg-slate-900/95 border border-slate-700/80 text-white shadow-2xl backdrop-blur-md flex flex-col gap-2 animate-fade-in">
+            <div className="flex items-start gap-2.5">
+              <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <div className="text-[11px] leading-relaxed text-slate-200">
+                <span className="font-semibold text-amber-300">Chưa nhận diện được tài liệu?</span>
+                <p className="text-slate-300 mt-0.5">
+                  Đặt tài liệu trên mặt bàn tối có độ tương phản cao hoặc bấm nút chụp thủ công. Nếu camera bị đơ hoặc nhận diện chậm, hãy bấm làm mới máy ảnh.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowSearchHint(false)}
+                className="px-2.5 py-1 text-[11px] font-medium text-slate-400 hover:text-slate-200"
+              >
+                Đã hiểu
+              </button>
+              <button
+                type="button"
+                onClick={restartCameraStream}
+                className="flex items-center gap-1 px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-bold active:scale-95 transition"
+              >
+                <RefreshCw className="w-3 h-3" />
+                <span>Làm mới máy ảnh</span>
+              </button>
+            </div>
           </div>
         )}
 

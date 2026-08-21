@@ -53,6 +53,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             <span className="px-2 py-0.5 rounded-md bg-blue-600 text-white text-[10px] font-bold tracking-wide">
               PDF
             </span>
+            <span className="text-xs font-semibold text-blue-400/90 tracking-tight">
+              by Ltd
+            </span>
           </div>
           <p className="text-xs text-slate-400 mt-0.5">Quét văn bản & CCCD chuẩn A4 nhanh chóng</p>
         </div>
