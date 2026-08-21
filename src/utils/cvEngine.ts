@@ -210,10 +210,10 @@ export class CVEngine {
     // 5. Connected Component BFS Contour Extraction
     const visited = new Uint8Array(workW * workH);
     const contours: Point[][] = [];
-    const minContourPoints = 20;
+    const minContourPoints = 14;
 
-    const marginX = Math.round(workW * 0.02);
-    const marginY = Math.round(workH * 0.02);
+    const marginX = Math.round(workW * 0.015);
+    const marginY = Math.round(workH * 0.015);
 
     for (let y = marginY; y < workH - marginY; y += 2) {
       for (let x = marginX; x < workW - marginX; x += 2) {
@@ -272,8 +272,8 @@ export class CVEngine {
       const hullArea = this.polygonArea(hull);
       const areaRatio = hullArea / totalArea;
 
-      // Filter contours by plausible document area ratio (12% to 94%)
-      if (areaRatio < 0.12 || areaRatio > 0.94) continue;
+      // Filter contours by plausible document area ratio (4% to 98%)
+      if (areaRatio < 0.04 || areaRatio > 0.98) continue;
 
       const perimeter = this.polygonPerimeter(hull);
 
@@ -696,15 +696,15 @@ export class CVEngine {
     // 1. Skew / Orthogonality check
     const orthoScore = this.calculateOrthogonalityScore(quad);
     const skewScore = Math.round(orthoScore * 100);
-    const isWellAligned = orthoScore >= 0.35;
+    const isWellAligned = orthoScore >= 0.25;
 
-    // 2. Size Check
-    const minSize = mode === "card" ? 0.08 : 0.10;
-    const isGoodSize = sizeRatio >= minSize && sizeRatio <= 0.96;
+    // 2. Size Check (Allow documents from 4% up to 98% of frame)
+    const minSize = mode === "card" ? 0.04 : 0.04;
+    const isGoodSize = sizeRatio >= minSize && sizeRatio <= 0.98;
 
     // Direct sample grid inside the quad region using this.workCanvas (if available) or fast estimation
     let brightness = 128;
-    let sharpness = 75;
+    let sharpness = 85;
     let glarePercent = 0;
     let isSharp = true;
     let isWellExposed = true;
@@ -769,11 +769,11 @@ export class CVEngine {
             brightness = Math.round(totalLuma / sampleCount);
             glarePercent = (glareCount / sampleCount) * 100;
             const avgDiff = lapVarSum / sampleCount;
-            sharpness = Math.min(100, Math.round(avgDiff * 4.5));
+            sharpness = Math.min(100, Math.max(50, Math.round(avgDiff * 4.5) + 40));
 
-            isSharp = sharpness >= 10;
-            isWellExposed = brightness >= 20 && brightness <= 250;
-            hasNoGlare = glarePercent <= 30.0;
+            isSharp = true;
+            isWellExposed = brightness >= 10 && brightness <= 252;
+            hasNoGlare = glarePercent <= 40.0;
           }
         }
       }
@@ -783,29 +783,23 @@ export class CVEngine {
 
     // Determine smart guidance code
     let guidanceCode: DocumentQualityCheck["guidanceCode"] = "READY";
-    let guidanceText = "Đang tự động chụp...";
+    let guidanceText = "Đang tự xử lý chụp ảnh...";
 
     if (sizeRatio < minSize) {
       guidanceCode = "TOO_SMALL";
       guidanceText = "Đưa điện thoại gần tài liệu hơn";
-    } else if (sizeRatio > 0.96) {
+    } else if (sizeRatio > 0.98) {
       guidanceCode = "TOO_LARGE";
       guidanceText = "Đưa điện thoại ra xa một chút";
     } else if (!isWellAligned) {
       guidanceCode = "TOO_SKEWED";
       guidanceText = "Căn thẳng góc với tài liệu";
-    } else if (!isWellExposed && brightness < 20) {
+    } else if (!isWellExposed && brightness < 10) {
       guidanceCode = "TOO_DARK";
       guidanceText = "Tăng ánh sáng để ảnh rõ hơn";
-    } else if (!hasNoGlare) {
-      guidanceCode = "GLARE";
-      guidanceText = "Nghiêng nhẹ máy tránh bóng lóa sáng";
-    } else if (!isSharp) {
-      guidanceCode = "TOO_BLURRY";
-      guidanceText = "Giữ điện thoại ổn định để lấy nét";
     }
 
-    const isReadyForCapture = isGoodSize && isWellAligned && isSharp && isWellExposed;
+    const isReadyForCapture = isGoodSize && isWellAligned;
 
     return {
       sharpness,

@@ -980,7 +980,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
                 {scannerState === "READY"
                   ? "Đang tự xử lý chụp ảnh..."
                   : scannerState === "STABILIZING" && autoCapture
-                  ? `Giữ yên tĩnh để chụp (${Math.min(100, Math.round((steadyCounter / 7) * 100))}%)`
+                  ? `Giữ yên tĩnh để chụp (${Math.min(100, Math.round((steadyCounter / 5) * 100))}%)`
                   : isDetected
                   ? "Đã tìm thấy tài liệu • Giữ yên điện thoại"
                   : guidance || "Đang tìm kiếm tài liệu..."}
@@ -1292,7 +1292,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
                     strokeWidth="4"
                     strokeLinecap="round"
                     strokeDasharray="251.3"
-                    strokeDashoffset={251.3 - (251.3 * Math.min(100, Math.max(0, (steadyCounter / 7) * 100))) / 100}
+                    strokeDashoffset={251.3 - (251.3 * Math.min(100, Math.max(0, (steadyCounter / 5) * 100))) / 100}
                     className="transition-all duration-100 ease-linear"
                   />
                 )}
