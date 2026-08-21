@@ -17,13 +17,13 @@ export interface TrackerConfig {
 }
 
 export const DEFAULT_TRACKER_CONFIG: TrackerConfig = {
-  historySize: 12,
+  historySize: 14,
   minConfidenceHigh: 0.35, // Low entry barrier to lock onto document
   minConfidenceLow: 0.18,  // Hysteresis low threshold to hold lock
-  minStabilityScoreForCapture: 65, // Increased stability threshold
-  minConfidenceForCapture: 0.40,
-  requiredStableFrames: 12, // ~1.2 - 1.5s of deliberate steady camera hold before auto-capture
-  maxCornerDriftRatio: 0.035, // 3.5% of frame width
+  minStabilityScoreForCapture: 70, // Higher stability threshold to prevent shaky captures
+  minConfidenceForCapture: 0.45,
+  requiredStableFrames: 18, // ~1.5 - 1.8s of deliberate steady camera hold before auto-capture
+  maxCornerDriftRatio: 0.032, // 3.2% of frame width
 };
 
 /**

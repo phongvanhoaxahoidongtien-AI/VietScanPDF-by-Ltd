@@ -25,6 +25,7 @@ import {
   X,
 } from "lucide-react";
 import jsQR from "jsqr";
+import { CameraHelper } from "../utils/cameraHelper";
 
 interface QRScannerModalProps {
   onClose: () => void;
@@ -208,43 +209,25 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({ onClose }) => {
     triggerScanFeedback();
   };
 
-  // Start Camera
+  // Start Camera with Resilient Progressive Fallback
   const startCamera = useCallback(async () => {
     setCameraError(null);
     try {
       if (videoRef.current && videoRef.current.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
-        stream.getTracks().forEach((t) => t.stop());
+        CameraHelper.stopStream(videoRef.current.srcObject as MediaStream);
       }
 
-      const constraints: MediaStreamConstraints = {
-        video: {
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1280, min: 640 },
-          height: { ideal: 720, min: 480 },
-        },
-        audio: false,
-      };
-
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      const res = await CameraHelper.acquireStream("environment");
 
       if (videoRef.current) {
-        videoRef.current.srcObject = stream;
+        videoRef.current.srcObject = res.stream;
         await videoRef.current.play();
-
-        const track = stream.getVideoTracks()[0];
-        const capabilities: any = track.getCapabilities ? track.getCapabilities() : {};
-        if (capabilities && capabilities.torch) {
-          setHasTorch(true);
-        }
+        setHasTorch(res.hasTorch);
       }
     } catch (err: any) {
-      console.error("Camera access error:", err);
-      let msg = "Không thể mở camera. Vui lòng cấp quyền Camera.";
-      if (err.name === "NotAllowedError") {
-        msg = "Quyền truy cập Camera đã bị từ chối. Hãy mở cài đặt để cho phép.";
-      }
-      setCameraError(msg);
+      console.warn("QR Camera access warning:", err?.message || err);
+      const friendlyErr = CameraHelper.formatError(err);
+      setCameraError(friendlyErr.message);
     }
   }, []);
 
@@ -256,8 +239,7 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({ onClose }) => {
     return () => {
       if (animFrameId.current) cancelAnimationFrame(animFrameId.current);
       if (videoRef.current && videoRef.current.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
-        stream.getTracks().forEach((t) => t.stop());
+        CameraHelper.stopStream(videoRef.current.srcObject as MediaStream);
       }
     };
   }, [isScanning, startCamera]);

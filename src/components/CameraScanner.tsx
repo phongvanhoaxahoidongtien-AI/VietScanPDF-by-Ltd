@@ -22,11 +22,13 @@ import {
   Sun,
   ShieldCheck,
   Smartphone,
+  ClipboardPaste,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { ScanMode, QuadPoints, ScannedPage, FilterMode, Point, DocumentQualityCheck, CardSideAnalysis } from "../types";
 import { CVEngine } from "../utils/cvEngine";
 import { DocumentTracker } from "../utils/documentTracker";
+import { CameraHelper } from "../utils/cameraHelper";
 import { CropAdjuster } from "./CropAdjuster";
 
 export type ScannerState =
@@ -104,38 +106,22 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     currentScannerStateRef.current = scannerState;
   }, [scannerState]);
 
-  // Start Camera Stream
+  // Start Camera Stream with Resilient Multi-Tier Fallback
   const startCamera = useCallback(async () => {
     setScannerState("INITIALIZING");
     setCameraError(null);
 
     try {
       if (videoRef.current && videoRef.current.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
-        stream.getTracks().forEach((t) => t.stop());
+        CameraHelper.stopStream(videoRef.current.srcObject as MediaStream);
       }
 
-      const constraints: MediaStreamConstraints = {
-        video: {
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1920, min: 1280 },
-          height: { ideal: 1080, min: 720 },
-        },
-        audio: false,
-      };
-
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      const res = await CameraHelper.acquireStream("environment");
 
       if (videoRef.current) {
-        videoRef.current.srcObject = stream;
+        videoRef.current.srcObject = res.stream;
         await videoRef.current.play();
-
-        // Check torch capability
-        const track = stream.getVideoTracks()[0];
-        const capabilities: any = track.getCapabilities ? track.getCapabilities() : {};
-        if (capabilities && capabilities.torch) {
-          setHasTorch(true);
-        }
+        setHasTorch(res.hasTorch);
       }
 
       setScannerState("SEARCHING");
@@ -143,14 +129,9 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
       setShowSearchHint(false);
       setGuidance("Đưa tài liệu vào khung hình");
     } catch (err: any) {
-      console.error("Camera access error:", err);
-      let errMsg = "Không thể mở máy ảnh. Vui lòng cấp quyền Camera trong cài đặt trình duyệt.";
-      if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
-        errMsg = "Quyền truy cập Camera đã bị từ chối. Hãy mở Cài đặt trình duyệt để cho phép.";
-      } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
-        errMsg = "Không tìm thấy máy ảnh trên thiết bị. Bạn có thể chọn ảnh từ thư viện.";
-      }
-      setCameraError(errMsg);
+      console.warn("Camera access warning:", err?.message || err);
+      const friendlyErr = CameraHelper.formatError(err);
+      setCameraError(friendlyErr.message);
       setScannerState("INITIALIZING");
     }
   }, []);
@@ -220,25 +201,42 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     }
   };
 
-  // Sound and Haptic feedback helper
+  // Sound and Haptic feedback helper (Doubled tactile & audible shutter click)
   const triggerCaptureFeedback = () => {
     try {
       if (navigator.vibrate) {
-        navigator.vibrate([50, 40, 50]);
+        navigator.vibrate([90, 60, 140]);
       }
       const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
       if (AudioCtxClass) {
         const audioCtx = new AudioCtxClass();
-        const osc = audioCtx.createOscillator();
-        const gain = audioCtx.createGain();
-        osc.type = "sine";
-        osc.frequency.setValueAtTime(880, audioCtx.currentTime);
-        gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
-        osc.connect(gain);
-        gain.connect(audioCtx.destination);
-        osc.start();
-        osc.stop(audioCtx.currentTime + 0.15);
+        const now = audioCtx.currentTime;
+
+        // Click 1 (Mirror flip)
+        const osc1 = audioCtx.createOscillator();
+        const gain1 = audioCtx.createGain();
+        osc1.type = "triangle";
+        osc1.frequency.setValueAtTime(1200, now);
+        osc1.frequency.exponentialRampToValueAtTime(400, now + 0.08);
+        gain1.gain.setValueAtTime(0.3, now);
+        gain1.gain.exponentialRampToValueAtTime(0.01, now + 0.08);
+        osc1.connect(gain1);
+        gain1.connect(audioCtx.destination);
+        osc1.start(now);
+        osc1.stop(now + 0.08);
+
+        // Click 2 (Curtain close)
+        const osc2 = audioCtx.createOscillator();
+        const gain2 = audioCtx.createGain();
+        osc2.type = "sine";
+        osc2.frequency.setValueAtTime(950, now + 0.06);
+        osc2.frequency.exponentialRampToValueAtTime(300, now + 0.22);
+        gain2.gain.setValueAtTime(0.28, now + 0.06);
+        gain2.gain.exponentialRampToValueAtTime(0.01, now + 0.22);
+        osc2.connect(gain2);
+        gain2.connect(audioCtx.destination);
+        osc2.start(now + 0.06);
+        osc2.stop(now + 0.22);
       }
     } catch (e) {
       // Autoplay policy fallback
@@ -257,8 +255,8 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
       setIsFlashing(true);
       triggerCaptureFeedback();
 
-      // Increased flash / shutter animation duration (doubled to 640ms for clear visual and tactile feedback)
-      setTimeout(() => setIsFlashing(false), 640);
+      // Increased flash / shutter animation duration (doubled to 700ms for clear visual and tactile feedback)
+      setTimeout(() => setIsFlashing(false), 700);
 
       const video = videoRef.current;
       const vw = video.videoWidth || 1280;
@@ -656,6 +654,84 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     };
   }, [autoCapture, mode, cardSide, captureFrame]);
 
+  // Process an image data URL (from gallery, clipboard, or sample)
+  const processImageSource = useCallback((dataUrl: string) => {
+    const img = new Image();
+    img.onload = () => {
+      const isCard = mode === "cccd" || mode === "driver_license";
+      let selectedQuad: QuadPoints;
+
+      if (isCard) {
+        // For CCCD/GPLX: Crop centered ~70% region (15% margin on 4 sides) instead of 100% full frame
+        const marginX = img.naturalWidth * 0.15;
+        const marginY = img.naturalHeight * 0.15;
+        selectedQuad = {
+          topLeft: { x: marginX, y: marginY },
+          topRight: { x: img.naturalWidth - marginX, y: marginY },
+          bottomRight: { x: img.naturalWidth - marginX, y: img.naturalHeight - marginY },
+          bottomLeft: { x: marginX, y: img.naturalHeight - marginY },
+        };
+      } else {
+        // For Document: Full outer corners
+        selectedQuad = {
+          topLeft: { x: 0, y: 0 },
+          topRight: { x: img.naturalWidth, y: 0 },
+          bottomRight: { x: img.naturalWidth, y: img.naturalHeight },
+          bottomLeft: { x: 0, y: img.naturalHeight },
+        };
+      }
+
+      const warped = CVEngine.warpPerspective(img, selectedQuad);
+      const processedCanvas = CVEngine.applyFilter(warped, "document", 0);
+      const processedUrl = processedCanvas.toDataURL("image/jpeg", 0.92);
+      const pHash = CVEngine.computePerceptualHashFromCanvas(warped);
+
+      const newPage: ScannedPage = {
+        id: `page_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+        originalImage: dataUrl,
+        processedImage: processedUrl,
+        quad: selectedQuad,
+        filter: "document",
+        rotation: 0,
+        createdAt: Date.now(),
+        width: processedCanvas.width,
+        height: processedCanvas.height,
+        perceptualHash: pHash,
+        detectedSide: cardSide,
+      };
+
+      setReviewingPage(newPage);
+      setScannerState("REVIEW");
+      trackerRef.current.setCooldown(5000);
+    };
+    img.src = dataUrl;
+  }, [mode, cardSide]);
+
+  // Global paste handler for quick scanning
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith("image/")) {
+          const file = items[i].getAsFile();
+          if (file) {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+              const dataUrl = event.target?.result as string;
+              if (dataUrl) processImageSource(dataUrl);
+            };
+            reader.readAsDataURL(file);
+          }
+          break;
+        }
+      }
+    };
+
+    window.addEventListener("paste", handlePaste);
+    return () => window.removeEventListener("paste", handlePaste);
+  }, [processImageSource]);
+
   // Handle image import from device
   const handleFileImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -666,60 +742,45 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
       const reader = new FileReader();
       reader.onload = (event) => {
         const dataUrl = event.target?.result as string;
-        const img = new Image();
-        img.onload = () => {
-          const isCard = mode === "cccd" || mode === "driver_license";
-          let selectedQuad: QuadPoints;
-
-          if (isCard) {
-            // For CCCD/GPLX: Crop centered ~70% region (15% margin on 4 sides) instead of 100% full frame
-            const marginX = img.naturalWidth * 0.15;
-            const marginY = img.naturalHeight * 0.15;
-            selectedQuad = {
-              topLeft: { x: marginX, y: marginY },
-              topRight: { x: img.naturalWidth - marginX, y: marginY },
-              bottomRight: { x: img.naturalWidth - marginX, y: img.naturalHeight - marginY },
-              bottomLeft: { x: marginX, y: img.naturalHeight - marginY },
-            };
-          } else {
-            // For Document: Full outer corners
-            selectedQuad = {
-              topLeft: { x: 0, y: 0 },
-              topRight: { x: img.naturalWidth, y: 0 },
-              bottomRight: { x: img.naturalWidth, y: img.naturalHeight },
-              bottomLeft: { x: 0, y: img.naturalHeight },
-            };
-          }
-
-          const warped = CVEngine.warpPerspective(img, selectedQuad);
-          const processedCanvas = CVEngine.applyFilter(warped, "document", 0);
-          const processedUrl = processedCanvas.toDataURL("image/jpeg", 0.92);
-          const pHash = CVEngine.computePerceptualHashFromCanvas(warped);
-
-          const newPage: ScannedPage = {
-            id: `page_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-            originalImage: dataUrl,
-            processedImage: processedUrl,
-            quad: selectedQuad,
-            filter: "document",
-            rotation: 0,
-            createdAt: Date.now(),
-            width: processedCanvas.width,
-            height: processedCanvas.height,
-            perceptualHash: pHash,
-            detectedSide: cardSide,
-          };
-
-          setReviewingPage(newPage);
-          setScannerState("REVIEW");
-          trackerRef.current.setCooldown(5000);
-        };
-        img.src = dataUrl;
+        if (dataUrl) processImageSource(dataUrl);
       };
       reader.readAsDataURL(file);
     });
 
     if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  // Quick action to paste from clipboard via button
+  const handlePasteFromClipboard = async () => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.read) {
+        const items = await navigator.clipboard.read();
+        for (const item of items) {
+          const imgType = item.types.find((t) => t.startsWith("image/"));
+          if (imgType) {
+            const blob = await item.getType(imgType);
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+              const dataUrl = ev.target?.result as string;
+              if (dataUrl) processImageSource(dataUrl);
+            };
+            reader.readAsDataURL(blob);
+            return;
+          }
+        }
+      }
+      alert("Không tìm thấy ảnh trong bộ nhớ tạm. Hãy chụp màn hình hoặc sao chép ảnh rồi bấm Dán.");
+    } catch {
+      alert("Hãy dùng phím tắt Ctrl+V (hoặc Cmd+V) để dán ảnh trực tiếp.");
+    }
+  };
+
+  // Load sample document for testing
+  const handleLoadSampleDocument = () => {
+    const sampleUrl = CameraHelper.createSampleDocumentDataUrl();
+    if (sampleUrl) {
+      processImageSource(sampleUrl);
+    }
   };
 
   const is2SidedCard = mode === "cccd" || mode === "driver_license";
@@ -913,21 +974,38 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
                 <AlertCircle className="w-6 h-6" />
               </div>
               <h3 className="text-lg font-bold text-white mb-2">Không thể mở máy ảnh</h3>
-              <p className="text-sm text-slate-300 mb-6 leading-relaxed">{cameraError}</p>
-              <div className="flex flex-col gap-3">
+              <p className="text-sm text-slate-300 mb-5 leading-relaxed">{cameraError}</p>
+              <div className="flex flex-col gap-2.5">
                 <button
                   onClick={startCamera}
-                  className="w-full min-h-[44px] flex items-center justify-center gap-2 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 font-semibold text-white transition active:scale-98 shadow-lg shadow-blue-600/30"
+                  className="w-full min-h-[44px] flex items-center justify-center gap-2 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 font-semibold text-white transition active:scale-98 shadow-lg shadow-blue-600/30 text-sm"
                 >
                   <RefreshCw className="w-4 h-4" />
-                  <span>Thử lại</span>
+                  <span>Thử kết nối lại máy ảnh</span>
                 </button>
+
                 <button
                   onClick={() => fileInputRef.current?.click()}
-                  className="w-full min-h-[44px] flex items-center justify-center gap-2 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 font-medium text-slate-200 transition active:scale-98"
+                  className="w-full min-h-[44px] flex items-center justify-center gap-2 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 font-semibold text-slate-200 transition active:scale-98 border border-slate-700 text-sm"
                 >
-                  <ImageIcon className="w-4 h-4" />
+                  <ImageIcon className="w-4 h-4 text-blue-400" />
                   <span>Chọn ảnh từ thiết bị</span>
+                </button>
+
+                <button
+                  onClick={handlePasteFromClipboard}
+                  className="w-full min-h-[44px] flex items-center justify-center gap-2 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 font-semibold text-slate-200 transition active:scale-98 border border-slate-700 text-sm"
+                >
+                  <ClipboardPaste className="w-4 h-4 text-emerald-400" />
+                  <span>Dán ảnh từ Clipboard (Ctrl+V)</span>
+                </button>
+
+                <button
+                  onClick={handleLoadSampleDocument}
+                  className="w-full min-h-[44px] flex items-center justify-center gap-2 py-2.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 font-semibold text-emerald-300 transition active:scale-98 border border-emerald-500/40 text-sm"
+                >
+                  <Sparkles className="w-4 h-4 text-emerald-400" />
+                  <span>Thử quét tài liệu mẫu A4</span>
                 </button>
               </div>
             </div>
