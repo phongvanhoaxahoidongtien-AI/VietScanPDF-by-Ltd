@@ -1,7 +1,7 @@
 /**
  * Centralized File Naming Utility for VietScan_by_Ltd
- * Format: VietScan_by_Ltd_tai_lieu_DD_MM_YY.pdf
- * With duplicate index: VietScan_by_Ltd_tai_lieu_DD_MM_YY_01.pdf
+ * Format: VietScan_by_Ltd_dd_mm_yy_hh_mm_ss
+ * Example: VietScan_by_Ltd_21_08_26_15_30_45.pdf
  */
 
 import { ScanMode } from "../types";
@@ -14,19 +14,21 @@ export interface FileNameOptions {
 }
 
 /**
- * Generates the standardized document file name according to VietScan_by_Ltd rules.
- * Uses local device date (Vietnam timezone / local date).
+ * Generates the standardized document file name according to VietScan_by_Ltd rules:
+ * VietScan_by_Ltd_dd_mm_yy_hh_mm_ss (system time from user device)
  */
 export function generateDocumentFileName(options?: FileNameOptions): string {
   const d = options?.date ? new Date(options.date) : new Date();
 
-  // Local device date DD_MM_YY
+  // Local device date and time dd_mm_yy_hh_mm_ss
   const day = String(d.getDate()).padStart(2, "0");
   const month = String(d.getMonth() + 1).padStart(2, "0");
-  const year = String(d.getFullYear()).slice(-2); // 2-digit year, e.g. "26"
+  const year = String(d.getFullYear()).slice(-2); // 2-digit year
+  const hours = String(d.getHours()).padStart(2, "0");
+  const minutes = String(d.getMinutes()).padStart(2, "0");
+  const seconds = String(d.getSeconds()).padStart(2, "0");
 
-  const catLabel = options?.category === "cccd" ? "cccd" : options?.category === "driver_license" ? "gplx" : "tai_lieu";
-  const base = `VietScan_by_Ltd_${catLabel}_${day}_${month}_${year}`;
+  const base = `VietScan_by_Ltd_${day}_${month}_${year}_${hours}_${minutes}_${seconds}`;
   const ext = options?.extension || "pdf";
 
   if (options?.suffixIndex && options.suffixIndex > 0) {
@@ -38,14 +40,13 @@ export function generateDocumentFileName(options?: FileNameOptions): string {
 }
 
 /**
- * Generates standard document title for display and initial document creation
+ * Generates standard document title for display and initial document creation:
+ * VietScan_by_Ltd_dd_mm_yy_hh_mm_ss
  */
 export function generateDefaultDocumentTitle(categoryOrDate?: ScanMode | Date | number, dateInput?: Date | number): string {
-  let category: ScanMode = "document";
   let dateVal: Date | number | undefined = undefined;
 
   if (typeof categoryOrDate === "string") {
-    category = categoryOrDate as ScanMode;
     dateVal = dateInput;
   } else {
     dateVal = categoryOrDate;
@@ -55,7 +56,9 @@ export function generateDefaultDocumentTitle(categoryOrDate?: ScanMode | Date | 
   const day = String(d.getDate()).padStart(2, "0");
   const month = String(d.getMonth() + 1).padStart(2, "0");
   const year = String(d.getFullYear()).slice(-2);
+  const hours = String(d.getHours()).padStart(2, "0");
+  const minutes = String(d.getMinutes()).padStart(2, "0");
+  const seconds = String(d.getSeconds()).padStart(2, "0");
 
-  const catLabel = category === "cccd" ? "cccd" : category === "driver_license" ? "gplx" : "tai_lieu";
-  return `VietScan_by_Ltd_${catLabel}_${day}_${month}_${year}`;
+  return `VietScan_by_Ltd_${day}_${month}_${year}_${hours}_${minutes}_${seconds}`;
 }

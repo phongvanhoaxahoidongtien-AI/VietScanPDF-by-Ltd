@@ -510,37 +510,35 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           }
 
           if (trackResult) {
-            // 3. Coordinate mapping from video space to screen space
-            const scaleX = vw / (video.videoWidth || 1);
-            const scaleY = vh / (video.videoHeight || 1);
+            // 3. Accurate coordinate mapping from video space to screen space considering CSS object-cover
+            const vidW = video.videoWidth || 1280;
+            const vidH = video.videoHeight || 720;
+            const renderScale = Math.max(vw / vidW, vh / vidH);
+            const renderW = vidW * renderScale;
+            const renderH = vidH * renderScale;
+            const offsetX = (vw - renderW) / 2;
+            const offsetY = (vh - renderH) / 2;
+
+            const mapToScreen = (pt: Point): Point => ({
+              x: offsetX + pt.x * renderScale,
+              y: offsetY + pt.y * renderScale,
+            });
 
             let curScreen: QuadPoints;
             if (trackResult.smoothedQuad) {
               curScreen = {
-                topLeft: {
-                  x: trackResult.smoothedQuad.topLeft.x * scaleX,
-                  y: trackResult.smoothedQuad.topLeft.y * scaleY,
-                },
-                topRight: {
-                  x: trackResult.smoothedQuad.topRight.x * scaleX,
-                  y: trackResult.smoothedQuad.topRight.y * scaleY,
-                },
-                bottomRight: {
-                  x: trackResult.smoothedQuad.bottomRight.x * scaleX,
-                  y: trackResult.smoothedQuad.bottomRight.y * scaleY,
-                },
-                bottomLeft: {
-                  x: trackResult.smoothedQuad.bottomLeft.x * scaleX,
-                  y: trackResult.smoothedQuad.bottomLeft.y * scaleY,
-                },
+                topLeft: mapToScreen(trackResult.smoothedQuad.topLeft),
+                topRight: mapToScreen(trackResult.smoothedQuad.topRight),
+                bottomRight: mapToScreen(trackResult.smoothedQuad.bottomRight),
+                bottomLeft: mapToScreen(trackResult.smoothedQuad.bottomLeft),
               };
             } else {
-              const defQ = CVEngine.getDefaultQuad(video.videoWidth, video.videoHeight, targetAspect);
+              const defQ = CVEngine.getDefaultQuad(vidW, vidH, targetAspect);
               curScreen = {
-                topLeft: { x: defQ.topLeft.x * scaleX, y: defQ.topLeft.y * scaleY },
-                topRight: { x: defQ.topRight.x * scaleX, y: defQ.topRight.y * scaleY },
-                bottomRight: { x: defQ.bottomRight.x * scaleX, y: defQ.bottomRight.y * scaleY },
-                bottomLeft: { x: defQ.bottomLeft.x * scaleX, y: defQ.bottomLeft.y * scaleY },
+                topLeft: mapToScreen(defQ.topLeft),
+                topRight: mapToScreen(defQ.topRight),
+                bottomRight: mapToScreen(defQ.bottomRight),
+                bottomLeft: mapToScreen(defQ.bottomLeft),
               };
             }
 
@@ -1276,7 +1274,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
                     strokeWidth="4"
                     strokeLinecap="round"
                     strokeDasharray="251.3"
-                    strokeDashoffset={251.3 - (251.3 * Math.min(100, Math.max(0, (steadyCounter / 9) * 100))) / 100}
+                    strokeDashoffset={251.3 - (251.3 * Math.min(100, Math.max(0, (steadyCounter / 7) * 100))) / 100}
                     className="transition-all duration-100 ease-linear"
                   />
                 )}

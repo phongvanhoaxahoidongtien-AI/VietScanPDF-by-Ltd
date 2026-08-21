@@ -679,7 +679,8 @@ export class CVEngine {
   }
 
   /**
-   * STAGE 4: Quality Checks (Blur, Glare, Brightness, Size, Skew)
+   * STAGE 4: High-Performance Quality Checks (Blur, Glare, Brightness, Size, Skew)
+   * Evaluates lighting, sharpness, and size directly without heavy canvas homography allocations.
    */
   static checkDocumentQuality(
     sourceCanvas: HTMLCanvasElement | HTMLVideoElement | CanvasImageSource,
@@ -695,94 +696,90 @@ export class CVEngine {
     // 1. Skew / Orthogonality check
     const orthoScore = this.calculateOrthogonalityScore(quad);
     const skewScore = Math.round(orthoScore * 100);
-    const isWellAligned = orthoScore >= 0.45;
+    const isWellAligned = orthoScore >= 0.35;
 
     // 2. Size Check
-    const minSize = mode === "card" ? 0.12 : 0.14;
-    const isGoodSize = sizeRatio >= minSize && sizeRatio <= 0.95;
+    const minSize = mode === "card" ? 0.08 : 0.10;
+    const isGoodSize = sizeRatio >= minSize && sizeRatio <= 0.96;
 
-    // Sample interior region on small preview canvas to evaluate Blur & Glare
-    const sampleW = 120;
-    const sampleH = 80;
-    const canvas = document.createElement("canvas");
-    canvas.width = sampleW;
-    canvas.height = sampleH;
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    // Direct sample grid inside the quad region using this.workCanvas (if available) or fast estimation
+    let brightness = 128;
+    let sharpness = 75;
+    let glarePercent = 0;
+    let isSharp = true;
+    let isWellExposed = true;
+    let hasNoGlare = true;
 
-    if (!ctx) {
-      return {
-        sharpness: 75,
-        brightness: 130,
-        glarePercent: 0,
-        sizeRatio,
-        skewScore,
-        isSharp: true,
-        isWellExposed: true,
-        hasNoGlare: true,
-        isGoodSize,
-        isWellAligned,
-        isReadyForCapture: isGoodSize && isWellAligned,
-        guidanceCode: isGoodSize ? "READY" : "TOO_SMALL",
-        guidanceText: isGoodSize ? "Đang chụp..." : "Đưa điện thoại gần tài liệu hơn",
-      };
-    }
+    try {
+      if (CVEngine._reusableWorkCtx && CVEngine._reusableWorkCanvas) {
+        const ww = CVEngine._reusableWorkCanvas.width;
+        const wh = CVEngine._reusableWorkCanvas.height;
+        const scaleX = ww / (frameW || 1);
+        const scaleY = wh / (frameH || 1);
 
-    // Warp sample interior
-    const warped = this.warpPerspective(sourceCanvas as any, quad, sampleW, sampleH);
-    ctx.drawImage(warped, 0, 0, sampleW, sampleH);
-    const imgData = ctx.getImageData(0, 0, sampleW, sampleH);
-    const data = imgData.data;
+        const p0 = { x: quad.topLeft.x * scaleX, y: quad.topLeft.y * scaleY };
+        const p1 = { x: quad.topRight.x * scaleX, y: quad.topRight.y * scaleY };
+        const p2 = { x: quad.bottomRight.x * scaleX, y: quad.bottomRight.y * scaleY };
+        const p3 = { x: quad.bottomLeft.x * scaleX, y: quad.bottomLeft.y * scaleY };
 
-    let totalLuma = 0;
-    let glareCount = 0;
-    const gray = new Uint8Array(sampleW * sampleH);
+        const minX = Math.max(0, Math.floor(Math.min(p0.x, p1.x, p2.x, p3.x)));
+        const maxX = Math.min(ww - 1, Math.ceil(Math.max(p0.x, p1.x, p2.x, p3.x)));
+        const minY = Math.max(0, Math.floor(Math.min(p0.y, p1.y, p2.y, p3.y)));
+        const maxY = Math.min(wh - 1, Math.ceil(Math.max(p0.y, p1.y, p2.y, p3.y)));
 
-    for (let i = 0; i < data.length; i += 4) {
-      const r = data[i];
-      const g = data[i + 1];
-      const b = data[i + 2];
-      const luma = (r * 77 + g * 150 + b * 29) >> 8;
-      gray[i / 4] = luma;
-      totalLuma += luma;
+        const sampleBoxW = maxX - minX;
+        const sampleBoxH = maxY - minY;
 
-      // Glare detection: Near maximum saturation white
-      if (luma > 248 && Math.abs(r - g) < 12 && Math.abs(g - b) < 12) {
-        glareCount++;
+        if (sampleBoxW > 10 && sampleBoxH > 10) {
+          const sampleImgData = CVEngine._reusableWorkCtx.getImageData(minX, minY, sampleBoxW, sampleBoxH);
+          const data = sampleImgData.data;
+
+          let totalLuma = 0;
+          let glareCount = 0;
+          let sampleCount = 0;
+          let lapVarSum = 0;
+
+          const step = Math.max(1, Math.floor(sampleBoxW / 24));
+
+          for (let y = 2; y < sampleBoxH - 2; y += step) {
+            for (let x = 2; x < sampleBoxW - 2; x += step) {
+              const idx = (y * sampleBoxW + x) * 4;
+              const r = data[idx];
+              const g = data[idx + 1];
+              const b = data[idx + 2];
+              const luma = (r * 77 + g * 150 + b * 29) >> 8;
+
+              totalLuma += luma;
+              sampleCount++;
+
+              if (luma > 248 && Math.abs(r - g) < 15 && Math.abs(g - b) < 15) {
+                glareCount++;
+              }
+
+              // Fast local difference for sharpness
+              const idxRight = (y * sampleBoxW + x + 1) * 4;
+              const idxDown = ((y + 1) * sampleBoxW + x) * 4;
+              const lumaR = (data[idxRight] * 77 + data[idxRight + 1] * 150 + data[idxRight + 2] * 29) >> 8;
+              const lumaD = (data[idxDown] * 77 + data[idxDown + 1] * 150 + data[idxDown + 2] * 29) >> 8;
+              lapVarSum += Math.abs(luma - lumaR) + Math.abs(luma - lumaD);
+            }
+          }
+
+          if (sampleCount > 0) {
+            brightness = Math.round(totalLuma / sampleCount);
+            glarePercent = (glareCount / sampleCount) * 100;
+            const avgDiff = lapVarSum / sampleCount;
+            sharpness = Math.min(100, Math.round(avgDiff * 4.5));
+
+            isSharp = sharpness >= 10;
+            isWellExposed = brightness >= 20 && brightness <= 250;
+            hasNoGlare = glarePercent <= 30.0;
+          }
+        }
       }
+    } catch (e) {
+      // Fallback
     }
-
-    const brightness = Math.round(totalLuma / (sampleW * sampleH));
-    const glarePercent = (glareCount / (sampleW * sampleH)) * 100;
-
-    // 3. Sharpness / Blur via Modified Laplacian Variance
-    let lapSum = 0;
-    let lapSqSum = 0;
-    let lapCount = 0;
-
-    for (let y = 1; y < sampleH - 1; y++) {
-      const rowPrev = (y - 1) * sampleW;
-      const rowCurr = y * sampleW;
-      const rowNext = (y + 1) * sampleW;
-      for (let x = 1; x < sampleW - 1; x++) {
-        const lap =
-          gray[rowPrev + x] +
-          gray[rowNext + x] +
-          gray[rowCurr + x - 1] +
-          gray[rowCurr + x + 1] -
-          4 * gray[rowCurr + x];
-        lapSum += lap;
-        lapSqSum += lap * lap;
-        lapCount++;
-      }
-    }
-
-    const lapMean = lapSum / Math.max(1, lapCount);
-    const lapVar = lapSqSum / Math.max(1, lapCount) - lapMean * lapMean;
-    const sharpness = Math.min(100, Math.round(Math.sqrt(Math.max(0, lapVar)) * 3.5));
-
-    const isSharp = sharpness >= 12;
-    const isWellExposed = brightness >= 25 && brightness <= 245;
-    const hasNoGlare = glarePercent <= 25.0;
 
     // Determine smart guidance code
     let guidanceCode: DocumentQualityCheck["guidanceCode"] = "READY";
@@ -791,13 +788,13 @@ export class CVEngine {
     if (sizeRatio < minSize) {
       guidanceCode = "TOO_SMALL";
       guidanceText = "Đưa điện thoại gần tài liệu hơn";
-    } else if (sizeRatio > 0.95) {
+    } else if (sizeRatio > 0.96) {
       guidanceCode = "TOO_LARGE";
       guidanceText = "Đưa điện thoại ra xa một chút";
     } else if (!isWellAligned) {
       guidanceCode = "TOO_SKEWED";
       guidanceText = "Căn thẳng góc với tài liệu";
-    } else if (!isWellExposed && brightness < 25) {
+    } else if (!isWellExposed && brightness < 20) {
       guidanceCode = "TOO_DARK";
       guidanceText = "Tăng ánh sáng để ảnh rõ hơn";
     } else if (!hasNoGlare) {
@@ -808,7 +805,7 @@ export class CVEngine {
       guidanceText = "Giữ điện thoại ổn định để lấy nét";
     }
 
-    const isReadyForCapture = isGoodSize && isWellAligned && isSharp;
+    const isReadyForCapture = isGoodSize && isWellAligned && isSharp && isWellExposed;
 
     return {
       sharpness,
