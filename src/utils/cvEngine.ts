@@ -125,7 +125,7 @@ export class CVEngine {
     // 3. Dual Edge Detection: Combined Directional Sobel Gradient & Local Adaptive Threshold
     const edges = new Uint8Array(workW * workH);
     const gradMagnitudes = new Uint8Array(workW * workH);
-    const edgeThreshold = Math.max(16, Math.min(46, lumaRange * 0.20));
+    const edgeThreshold = Math.max(10, Math.min(36, lumaRange * 0.14));
 
     // Compute integral image for fast local adaptive thresholding
     const integral = new Int32Array((workW + 1) * (workH + 1));
@@ -142,7 +142,7 @@ export class CVEngine {
 
     // Adaptive window radius (around 1/16th of frame width)
     const sRadius = Math.max(4, Math.round(workW / 18));
-    const adaptC = 7;
+    const adaptC = 5;
 
     for (let y = 1; y < workH - 1; y++) {
       const rowPrev = (y - 1) * workW;
@@ -180,7 +180,7 @@ export class CVEngine {
           integral[y0 * (workW + 1) + x0];
         const localMean = localSum / area;
 
-        const isAdaptiveEdge = blurred[rowCurr + x] < localMean - adaptC && mag > 10;
+        const isAdaptiveEdge = blurred[rowCurr + x] < localMean - adaptC && mag > 8;
 
         if (mag > edgeThreshold || isAdaptiveEdge) {
           edges[rowCurr + x] = 255;

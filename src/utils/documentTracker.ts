@@ -356,19 +356,19 @@ export class DocumentTracker {
     const isReadyForCapture = this.stableFrames >= this.config.requiredStableFrames;
 
     // 6. User-friendly guidance message
-    let guidance = "Đưa tài liệu vào khung hình";
+    let guidance = "Đang tìm kiếm tài liệu...";
     if (specificGuidance) {
       guidance = specificGuidance;
     } else if (isReadyForCapture) {
-      guidance = "Đang tự động chụp...";
+      guidance = "Đang tự xử lý chụp ảnh...";
     } else if (this.isDetectedState) {
-      if (stabilityScore < 60) {
-        guidance = "Giữ điện thoại ổn định để lấy nét...";
-      } else {
+      if (this.stableFrames > 0) {
         const progressPct = Math.round(
           Math.min(100, (this.stableFrames / this.config.requiredStableFrames) * 100)
         );
-        guidance = `Đang căn nét (${progressPct}%)...`;
+        guidance = `Giữ yên tĩnh để chụp (${progressPct}%)...`;
+      } else {
+        guidance = "Đã tìm thấy tài liệu • Giữ yên điện thoại";
       }
     }
 

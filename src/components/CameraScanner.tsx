@@ -203,42 +203,42 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     }
   };
 
-  // Sound and Haptic feedback helper (Doubled tactile & audible shutter click)
+  // Sound and Haptic feedback helper (Realistic, crisp mechanical shutter click sound)
   const triggerCaptureFeedback = () => {
     try {
       if (navigator.vibrate) {
-        navigator.vibrate([90, 60, 140]);
+        navigator.vibrate([60, 40, 90]);
       }
       const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
       if (AudioCtxClass) {
         const audioCtx = new AudioCtxClass();
         const now = audioCtx.currentTime;
 
-        // Click 1 (Mirror flip)
+        // Snappy initial click (mechanical switch / leaf shutter release)
         const osc1 = audioCtx.createOscillator();
         const gain1 = audioCtx.createGain();
-        osc1.type = "triangle";
-        osc1.frequency.setValueAtTime(1200, now);
-        osc1.frequency.exponentialRampToValueAtTime(400, now + 0.08);
-        gain1.gain.setValueAtTime(0.3, now);
-        gain1.gain.exponentialRampToValueAtTime(0.01, now + 0.08);
+        osc1.type = "sine";
+        osc1.frequency.setValueAtTime(2400, now);
+        osc1.frequency.exponentialRampToValueAtTime(320, now + 0.04);
+        gain1.gain.setValueAtTime(0.4, now);
+        gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
         osc1.connect(gain1);
         gain1.connect(audioCtx.destination);
         osc1.start(now);
-        osc1.stop(now + 0.08);
+        osc1.stop(now + 0.04);
 
-        // Click 2 (Curtain close)
+        // Crisp mechanical secondary click (aperture blade rebound)
         const osc2 = audioCtx.createOscillator();
         const gain2 = audioCtx.createGain();
-        osc2.type = "sine";
-        osc2.frequency.setValueAtTime(950, now + 0.06);
-        osc2.frequency.exponentialRampToValueAtTime(300, now + 0.22);
-        gain2.gain.setValueAtTime(0.28, now + 0.06);
-        gain2.gain.exponentialRampToValueAtTime(0.01, now + 0.22);
+        osc2.type = "triangle";
+        osc2.frequency.setValueAtTime(1800, now + 0.045);
+        osc2.frequency.exponentialRampToValueAtTime(200, now + 0.09);
+        gain2.gain.setValueAtTime(0.35, now + 0.045);
+        gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
         osc2.connect(gain2);
         gain2.connect(audioCtx.destination);
-        osc2.start(now + 0.06);
-        osc2.stop(now + 0.22);
+        osc2.start(now + 0.045);
+        osc2.stop(now + 0.09);
       }
     } catch (e) {
       // Autoplay policy fallback
@@ -589,44 +589,62 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
             ctx.stroke();
             ctx.restore();
 
-            // 5. Draw Adobe Scan-style 4 Glowing Corner Pins with Pulse Radar
+            // 5. Draw Adobe Scan-style 4 Glowing Corner Pins with Expanding Pulse Radar
             const drawAdobeCorner = (pt: Point, angleDeg: number) => {
               ctx.save();
               ctx.translate(pt.x, pt.y);
 
-              // Outer pulsating glow ring
-              const pulseScale = (Math.sin(now * 0.008) + 1) * 0.5; // 0 to 1
-              const outerRadius = isReady ? 14 : isDetected ? 11 + pulseScale * 4 : 8;
+              // 1. Expanding Outward Radar Pulse Wave
+              const pulsePhase1 = ((now * 0.003) % 1); // 0 to 1
+              const pulsePhase2 = (((now * 0.003) + 0.5) % 1);
 
-              ctx.beginPath();
-              ctx.arc(0, 0, outerRadius, 0, Math.PI * 2);
-              ctx.fillStyle = isReady
-                ? "rgba(16, 185, 129, 0.25)"
+              const radarColor = isReady
+                ? "rgba(16, 185, 129, "
                 : isStabilizing
-                ? "rgba(0, 210, 255, 0.28)"
+                ? "rgba(0, 210, 255, "
                 : isDetected
-                ? "rgba(59, 130, 246, 0.25)"
-                : "rgba(255, 255, 255, 0.15)";
+                ? "rgba(59, 130, 246, "
+                : "rgba(255, 255, 255, ";
+
+              // Primary Radar Wave
+              ctx.beginPath();
+              ctx.arc(0, 0, 8 + pulsePhase1 * 18, 0, Math.PI * 2);
+              ctx.strokeStyle = radarColor + `${(1 - pulsePhase1) * 0.6})`;
+              ctx.lineWidth = 1.8;
+              ctx.stroke();
+
+              // Secondary Radar Wave
+              ctx.beginPath();
+              ctx.arc(0, 0, 8 + pulsePhase2 * 18, 0, Math.PI * 2);
+              ctx.strokeStyle = radarColor + `${(1 - pulsePhase2) * 0.4})`;
+              ctx.lineWidth = 1.4;
+              ctx.stroke();
+
+              // Soft Glow Halo
+              ctx.beginPath();
+              ctx.arc(0, 0, 10, 0, Math.PI * 2);
+              ctx.fillStyle = radarColor + "0.3)";
               ctx.fill();
 
-              // Inner solid pin circle
+              // Inner solid pin circle with crisp white border
               ctx.beginPath();
-              ctx.arc(0, 0, isReady ? 7 : 6, 0, Math.PI * 2);
+              ctx.arc(0, 0, isReady ? 6.5 : 5.5, 0, Math.PI * 2);
               ctx.fillStyle = isReady ? "#10b981" : isStabilizing ? "#00d2ff" : isDetected ? "#3b82f6" : "#ffffff";
               ctx.fill();
               ctx.lineWidth = 2;
               ctx.strokeStyle = "#ffffff";
               ctx.stroke();
 
-              // Precision Corner angle bracket (Adobe Scan crosshair frame)
+              // Precision Corner Angle Bracket (Adobe Scan Crosshair L-Bracket)
               ctx.rotate((angleDeg * Math.PI) / 180);
               ctx.beginPath();
-              ctx.moveTo(0, 24);
+              ctx.moveTo(0, 26);
               ctx.lineTo(0, 0);
-              ctx.lineTo(24, 0);
+              ctx.lineTo(26, 0);
               ctx.strokeStyle = isReady ? "#10b981" : isStabilizing ? "#00d2ff" : isDetected ? "#60a5fa" : "#ffffff";
-              ctx.lineWidth = 3.5;
+              ctx.lineWidth = 3.8;
               ctx.lineCap = "round";
+              ctx.lineJoin = "round";
               ctx.stroke();
 
               ctx.restore();
@@ -960,12 +978,12 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
               )}
               <span className="truncate">
                 {scannerState === "READY"
-                  ? "Đang tự động chụp..."
+                  ? "Đang tự xử lý chụp ảnh..."
                   : scannerState === "STABILIZING" && autoCapture
-                  ? `Giữ yên để chụp (${Math.min(100, Math.round((steadyCounter / 9) * 100))}%)`
+                  ? `Giữ yên tĩnh để chụp (${Math.min(100, Math.round((steadyCounter / 7) * 100))}%)`
                   : isDetected
-                  ? "Đã thấy tài liệu • Giữ yên điện thoại"
-                  : guidance}
+                  ? "Đã tìm thấy tài liệu • Giữ yên điện thoại"
+                  : guidance || "Đang tìm kiếm tài liệu..."}
               </span>
             </div>
           </div>
