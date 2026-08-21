@@ -25,13 +25,21 @@ import {
   ClipboardPaste,
   Scan,
   ScanLine,
+  Cpu,
+  Layers,
+  Settings2,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { ScanMode, QuadPoints, ScannedPage, FilterMode, Point, DocumentQualityCheck, CardSideAnalysis } from "../types";
 import { CVEngine } from "../utils/cvEngine";
-import { DocumentTracker } from "../utils/documentTracker";
 import { CameraHelper } from "../utils/cameraHelper";
 import { CropAdjuster } from "./CropAdjuster";
+import { ScannerEngineManager } from "../services/scanner/ScannerEngineManager";
+import {
+  ScannerEngineType,
+  EngineDetectionResult,
+  EngineCaptureResult,
+} from "../services/scanner/types";
 
 export type ScannerState =
   | "INITIALIZING"
@@ -78,6 +86,11 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
   const [detectedQuad, setDetectedQuad] = useState<QuadPoints | null>(null);
   const [screenQuad, setScreenQuad] = useState<QuadPoints | null>(null);
 
+  // Engine State & Selection
+  const [activeEngineType, setActiveEngineType] = useState<ScannerEngineType>("autocapture");
+  const [activeEngineName, setActiveEngineName] = useState<string>("ML AutoCapture");
+  const [showEngineMenu, setShowEngineMenu] = useState<boolean>(false);
+
   // Quality and Card Side Analysis
   const [latestQuality, setLatestQuality] = useState<DocumentQualityCheck | null>(null);
   const [latestCardSide, setLatestCardSide] = useState<CardSideAnalysis | null>(null);
@@ -91,119 +104,47 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
   const [reviewingPage, setReviewingPage] = useState<ScannedPage | null>(null);
   const [isAdjustingCrop, setIsAdjustingCrop] = useState<boolean>(false);
 
+  // Jumping Animation State
+  const [jumpAnimationImage, setJumpAnimationImage] = useState<string | null>(null);
+
   // Search assistance & Thermal optimization refs
   const [showSearchHint, setShowSearchHint] = useState<boolean>(false);
   const searchStartTimeRef = useRef<number>(Date.now());
-  const lastCvDetectTimeRef = useRef<number>(0);
-  const lastTrackResultRef = useRef<any>(null);
-  const lastDetectionRef = useRef<any>(null);
-
-  // Document Tracker Instance
-  const trackerRef = useRef<DocumentTracker>(new DocumentTracker());
   const isCapturingRef = useRef<boolean>(false);
   const currentScannerStateRef = useRef<ScannerState>("INITIALIZING");
+  const autoCaptureRef = useRef<boolean>(autoCapture);
+  const modeRef = useRef<ScanMode>(mode);
+  const cardSideRef = useRef<"front" | "back">(cardSide);
+  const frontPageDraftRef = useRef<ScannedPage | null>(frontPageDraft);
 
-  // Keep state ref synchronized for zero-latency frame loop checks
+  // Scanner Engine Manager Instance
+  const engineManagerRef = useRef<ScannerEngineManager>(new ScannerEngineManager());
+
+  // Keep state refs synchronized
   useEffect(() => {
     currentScannerStateRef.current = scannerState;
   }, [scannerState]);
 
-  // Start Camera Stream with Resilient Multi-Tier Fallback
-  const startCamera = useCallback(async () => {
-    setScannerState("INITIALIZING");
-    setCameraError(null);
-
-    try {
-      if (videoRef.current && videoRef.current.srcObject) {
-        CameraHelper.stopStream(videoRef.current.srcObject as MediaStream);
-      }
-
-      const res = await CameraHelper.acquireStream("environment");
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = res.stream;
-        await videoRef.current.play();
-        setHasTorch(res.hasTorch);
-      }
-
-      setScannerState("SEARCHING");
-      searchStartTimeRef.current = Date.now();
-      setShowSearchHint(false);
-      setGuidance("Đưa tài liệu vào khung hình");
-    } catch (err: any) {
-      console.warn("Camera access warning:", err?.message || err);
-      const friendlyErr = CameraHelper.formatError(err);
-      setCameraError(friendlyErr.message);
-      setScannerState("INITIALIZING");
-    }
-  }, []);
-
-  // Full restart for media sensor and CV tracker
-  const restartCameraStream = useCallback(async () => {
-    trackerRef.current.unlock();
-    trackerRef.current.reset(0);
-    lastCvDetectTimeRef.current = 0;
-    lastTrackResultRef.current = null;
-    lastDetectionRef.current = null;
-    searchStartTimeRef.current = Date.now();
-    setShowSearchHint(false);
-    setDetectedQuad(null);
-    setIsDetected(false);
-    setSteadyCounter(0);
-    setStabilityScore(0);
-    setConfidenceScore(0);
-    await startCamera();
-  }, [startCamera]);
+  useEffect(() => {
+    autoCaptureRef.current = autoCapture;
+    engineManagerRef.current.updateConfig({ autoCapture });
+  }, [autoCapture]);
 
   useEffect(() => {
-    startCamera();
+    modeRef.current = mode;
+    engineManagerRef.current.updateConfig({ mode });
+  }, [mode]);
 
-    return () => {
-      if (animFrameId.current) {
-        cancelAnimationFrame(animFrameId.current);
-      }
-      if (videoRef.current && videoRef.current.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
-        stream.getTracks().forEach((t) => t.stop());
-      }
-    };
-  }, [startCamera]);
-
-  // Reset tracker on mode or cardSide change
   useEffect(() => {
-    trackerRef.current.reset();
-    lastCvDetectTimeRef.current = 0;
-    lastTrackResultRef.current = null;
-    lastDetectionRef.current = null;
-    searchStartTimeRef.current = Date.now();
-    setShowSearchHint(false);
-    setSteadyCounter(0);
-    setStabilityScore(0);
-    setConfidenceScore(0);
-    setIsDetected(false);
-    setDuplicateWarning(null);
-    if (scannerState !== "REVIEW") {
-      setScannerState("SEARCHING");
-    }
-  }, [mode, cardSide]);
+    cardSideRef.current = cardSide;
+    engineManagerRef.current.updateConfig({ cardSide });
+  }, [cardSide]);
 
-  // Toggle Torch/Flash
-  const toggleTorch = async () => {
-    if (!videoRef.current?.srcObject) return;
-    const stream = videoRef.current.srcObject as MediaStream;
-    const track = stream.getVideoTracks()[0];
-    try {
-      const nextState = !torchOn;
-      await (track as any).applyConstraints({
-        advanced: [{ torch: nextState }],
-      });
-      setTorchOn(nextState);
-    } catch (err) {
-      console.warn("Could not toggle torch:", err);
-    }
-  };
+  useEffect(() => {
+    frontPageDraftRef.current = frontPageDraft;
+  }, [frontPageDraft]);
 
-  // Sound and Haptic feedback helper (Realistic, crisp mechanical shutter click sound)
+  // Sound and Haptic feedback helper
   const triggerCaptureFeedback = () => {
     try {
       if (navigator.vibrate) {
@@ -240,100 +181,287 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         osc2.start(now + 0.045);
         osc2.stop(now + 0.09);
       }
-    } catch (e) {
+    } catch {
       // Autoplay policy fallback
     }
   };
 
   // Perform High Quality Capture, Warp & Perceptual Anti-Duplicate Verification
-  const captureFrame = useCallback(
-    async (manualQuad?: QuadPoints) => {
-      if (!videoRef.current || isCapturingRef.current || currentScannerStateRef.current === "REVIEW") {
-        return;
-      }
+  const processCaptureResult = useCallback(
+    async (capResult: EngineCaptureResult) => {
+      if (currentScannerStateRef.current === "REVIEW" || isCapturingRef.current) return;
 
       isCapturingRef.current = true;
       setScannerState("CAPTURING");
       setIsFlashing(true);
       triggerCaptureFeedback();
 
-      // Increased flash / shutter animation duration (doubled to 700ms for clear visual and tactile feedback)
-      setTimeout(() => setIsFlashing(false), 700);
+      setTimeout(() => setIsFlashing(false), 650);
 
-      const video = videoRef.current;
-      const vw = video.videoWidth || 1280;
-      const vh = video.videoHeight || 720;
+      const currentMode = modeRef.current;
+      const currentCardSide = cardSideRef.current;
+      const currentFrontDraft = frontPageDraftRef.current;
 
-      // Draw high-res still frame
-      const frameCanvas = document.createElement("canvas");
-      frameCanvas.width = vw;
-      frameCanvas.height = vh;
-      const ctx = frameCanvas.getContext("2d", { willReadFrequently: true });
-      if (!ctx) {
-        isCapturingRef.current = false;
-        setScannerState("SEARCHING");
-        return;
+      // Extract warped canvas or perform client warp
+      let processedCanvas: HTMLCanvasElement;
+      let pHash = "";
+
+      if (capResult.warpedDataUrl) {
+        const img = new Image();
+        await new Promise<void>((res) => {
+          img.onload = () => res();
+          img.src = capResult.warpedDataUrl!;
+        });
+        const c = document.createElement("canvas");
+        c.width = img.naturalWidth || img.width;
+        c.height = img.naturalHeight || img.height;
+        const ctx = c.getContext("2d");
+        if (ctx) ctx.drawImage(img, 0, 0);
+        const defaultFilter: FilterMode = currentMode === "photo" ? "photo" : "document";
+        processedCanvas = CVEngine.applyFilter(c, defaultFilter, 0);
+        pHash = CVEngine.computePerceptualHashFromCanvas(c);
+      } else {
+        const img = new Image();
+        await new Promise<void>((res) => {
+          img.onload = () => res();
+          img.src = capResult.dataUrl;
+        });
+        const warped = CVEngine.warpPerspective(img, capResult.quad);
+        const defaultFilter: FilterMode = currentMode === "photo" ? "photo" : "document";
+        processedCanvas = CVEngine.applyFilter(warped, defaultFilter, 0);
+        pHash = CVEngine.computePerceptualHashFromCanvas(warped);
       }
-      ctx.drawImage(video, 0, 0, vw, vh);
-
-      const rawDataUrl = frameCanvas.toDataURL("image/jpeg", 0.95);
-
-      // Determine quad to crop (prioritize tracked smoothed quad)
-      const targetAspectType = mode === "cccd" || mode === "driver_license" ? "card" : "document";
-      const detectedResult = CVEngine.detectDocumentQuad(frameCanvas, vw, vh, targetAspectType);
-      const q =
-        manualQuad ||
-        detectedQuad ||
-        (detectedResult.isRealQuad ? detectedResult.quad : null) ||
-        CVEngine.getDefaultQuad(vw, vh, targetAspectType);
-
-      // Warp perspective
-      const warped = CVEngine.warpPerspective(frameCanvas, q);
-
-      // Compute perceptual hash for duplicate detection
-      const pHash = CVEngine.computePerceptualHashFromCanvas(warped);
 
       // Anti-duplicate validation for CCCD / 2-sided card
-      if ((mode === "cccd" || mode === "driver_license") && cardSide === "back" && frontPageDraft?.perceptualHash) {
-        const similarity = CVEngine.compareHashSimilarity(frontPageDraft.perceptualHash, pHash);
+      if (
+        (currentMode === "cccd" || currentMode === "driver_license") &&
+        currentCardSide === "back" &&
+        currentFrontDraft?.perceptualHash
+      ) {
+        const similarity = CVEngine.compareHashSimilarity(currentFrontDraft.perceptualHash, pHash);
         if (similarity > 0.88) {
-          // Warning: User captured the front side again!
           setDuplicateWarning("Ảnh bị trùng với Mặt trước! Vui lòng lật sang Mặt sau của thẻ.");
           setTimeout(() => setDuplicateWarning(null), 3500);
           isCapturingRef.current = false;
           setScannerState("SEARCHING");
-          trackerRef.current.reset(1200);
           return;
         }
       }
 
-      // Apply initial clean filter
-      const defaultFilter: FilterMode = mode === "photo" ? "photo" : "document";
-      const processedCanvas = CVEngine.applyFilter(warped, defaultFilter, 0);
       const processedDataUrl = processedCanvas.toDataURL("image/jpeg", 0.92);
 
       const newPage: ScannedPage = {
         id: `page_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-        originalImage: rawDataUrl,
+        originalImage: capResult.dataUrl,
         processedImage: processedDataUrl,
-        quad: q,
-        filter: defaultFilter,
+        quad: capResult.quad,
+        filter: currentMode === "photo" ? "photo" : "document",
         rotation: 0,
         createdAt: Date.now(),
         width: processedCanvas.width,
         height: processedCanvas.height,
         perceptualHash: pHash,
-        detectedSide: cardSide,
+        detectedSide: currentCardSide,
       };
 
-      // Transition to REVIEW state & lock Auto-Capture
+      // Trigger Jump Animation (Adobe Scan thumbnail fly effect)
+      setJumpAnimationImage(processedDataUrl);
+      setTimeout(() => {
+        setJumpAnimationImage(null);
+      }, 700);
+
+      // Transition to REVIEW state
       setReviewingPage(newPage);
       setScannerState("REVIEW");
-      trackerRef.current.setCooldown(6000); // Strict capture lock
       isCapturingRef.current = false;
     },
-    [detectedQuad, mode, cardSide, frontPageDraft]
+    []
   );
+
+  // Start Camera Stream & Engine
+  const startCamera = useCallback(async () => {
+    setScannerState("INITIALIZING");
+    setCameraError(null);
+
+    try {
+      if (videoRef.current && videoRef.current.srcObject) {
+        CameraHelper.stopStream(videoRef.current.srcObject as MediaStream);
+      }
+
+      const res = await CameraHelper.acquireStream("environment");
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = res.stream;
+        await videoRef.current.play();
+        setHasTorch(res.hasTorch);
+
+        // Initialize Scanner Engine Manager
+        const manager = engineManagerRef.current;
+        const ok = await manager.initialize(
+          videoRef.current,
+          {
+            autoCapture: autoCaptureRef.current,
+            mode: modeRef.current,
+            cardSide: cardSideRef.current,
+            qualityPreset: "balanced",
+          },
+          "auto"
+        );
+
+        if (ok) {
+          setActiveEngineType(manager.getActiveEngineType() || "autocapture");
+          setActiveEngineName(manager.getActiveEngineName());
+          await manager.start();
+        }
+      }
+
+      setScannerState("SEARCHING");
+      searchStartTimeRef.current = Date.now();
+      setShowSearchHint(false);
+      setGuidance("Đưa tài liệu vào khung hình");
+    } catch (err: any) {
+      console.warn("Camera access warning:", err?.message || err);
+      const friendlyErr = CameraHelper.formatError(err);
+      setCameraError(friendlyErr.message);
+      setScannerState("INITIALIZING");
+    }
+  }, []);
+
+  // Bind Engine Manager Events
+  useEffect(() => {
+    const manager = engineManagerRef.current;
+
+    const unDet = manager.on("detection", (res: EngineDetectionResult) => {
+      if (currentScannerStateRef.current === "REVIEW" || isCapturingRef.current) return;
+
+      setIsDetected(res.isDetected);
+      setStabilityScore(res.stabilityScore);
+      setSteadyCounter(res.stableFrames);
+      setConfidenceScore(Math.round(res.confidence * 100));
+      setDetectedQuad(res.smoothedQuad || res.quad);
+      if (res.quality) setLatestQuality(res.quality);
+      if (res.cardSide) setLatestCardSide(res.cardSide);
+
+      if (res.isDetected) {
+        searchStartTimeRef.current = Date.now();
+        setShowSearchHint(false);
+      } else {
+        if (Date.now() - searchStartTimeRef.current > 7500) {
+          setShowSearchHint(true);
+        }
+      }
+
+      // Update state machine
+      if (res.isReadyForCapture) {
+        setScannerState("READY");
+      } else if (res.isDetected && res.stabilityScore >= 45) {
+        setScannerState("STABILIZING");
+      } else if (res.isDetected) {
+        setScannerState("DETECTING");
+      } else {
+        setScannerState("SEARCHING");
+      }
+    });
+
+    const unGuidance = manager.on("guidance", (res: any) => {
+      if (currentScannerStateRef.current !== "REVIEW") {
+        setGuidance(res.guidanceText);
+      }
+    });
+
+    const unCap = manager.on("capture", (res: EngineCaptureResult) => {
+      processCaptureResult(res);
+    });
+
+    const unFallback = manager.on("fallback", (info: any) => {
+      setActiveEngineType(info.engine);
+      setActiveEngineName(info.displayName);
+    });
+
+    return () => {
+      unDet();
+      unGuidance();
+      unCap();
+      unFallback();
+    };
+  }, [processCaptureResult]);
+
+  // Full restart for media sensor and CV tracker
+  const restartCameraStream = useCallback(async () => {
+    searchStartTimeRef.current = Date.now();
+    setShowSearchHint(false);
+    setDetectedQuad(null);
+    setIsDetected(false);
+    setSteadyCounter(0);
+    setStabilityScore(0);
+    setConfidenceScore(0);
+    await startCamera();
+  }, [startCamera]);
+
+  useEffect(() => {
+    startCamera();
+
+    return () => {
+      if (animFrameId.current) {
+        cancelAnimationFrame(animFrameId.current);
+      }
+      engineManagerRef.current.destroy();
+      if (videoRef.current && videoRef.current.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach((t) => t.stop());
+      }
+    };
+  }, [startCamera]);
+
+  // Reset tracker on mode or cardSide change
+  useEffect(() => {
+    searchStartTimeRef.current = Date.now();
+    setShowSearchHint(false);
+    setSteadyCounter(0);
+    setStabilityScore(0);
+    setConfidenceScore(0);
+    setIsDetected(false);
+    setDuplicateWarning(null);
+    if (scannerState !== "REVIEW") {
+      setScannerState("SEARCHING");
+    }
+  }, [mode, cardSide]);
+
+  // Toggle Torch/Flash
+  const toggleTorch = async () => {
+    if (!videoRef.current?.srcObject) return;
+    const stream = videoRef.current.srcObject as MediaStream;
+    const track = stream.getVideoTracks()[0];
+    try {
+      const nextState = !torchOn;
+      await (track as any).applyConstraints({
+        advanced: [{ torch: nextState }],
+      });
+      setTorchOn(nextState);
+    } catch (err) {
+      console.warn("Could not toggle torch:", err);
+    }
+  };
+
+  // Switch Active Engine manually
+  const handleSwitchEngine = async (type: ScannerEngineType | "auto") => {
+    setShowEngineMenu(false);
+    const ok = await engineManagerRef.current.switchEngine(type);
+    if (ok) {
+      setActiveEngineType(engineManagerRef.current.getActiveEngineType() || "autocapture");
+      setActiveEngineName(engineManagerRef.current.getActiveEngineName());
+      await engineManagerRef.current.start();
+    }
+  };
+
+  // Capture frame manually
+  const handleManualCapture = async () => {
+    if (isCapturingRef.current || scannerState === "REVIEW") return;
+    const capRes = await engineManagerRef.current.captureManual();
+    if (capRes) {
+      processCaptureResult(capRes);
+    }
+  };
 
   // Next Page / Confirm Action
   const handleProceedNextPage = (finishImmediately: boolean = false) => {
@@ -351,15 +479,11 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         setCardSide("back");
         setGuidance("Lật sang MẶT SAU của thẻ");
         setScannerState("SEARCHING");
-        trackerRef.current.unlock();
-        trackerRef.current.reset(1200);
-        lastCvDetectTimeRef.current = 0;
         searchStartTimeRef.current = Date.now();
         setShowSearchHint(false);
         setSteadyCounter(0);
         return;
       } else {
-        // Back side completed or direct finish
         onCapturePage(pageToSave, true);
         return;
       }
@@ -369,9 +493,6 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     onCapturePage(pageToSave, finishImmediately);
     if (!finishImmediately) {
       setScannerState("SEARCHING");
-      trackerRef.current.unlock();
-      trackerRef.current.reset(1000);
-      lastCvDetectTimeRef.current = 0;
       searchStartTimeRef.current = Date.now();
       setShowSearchHint(false);
       setSteadyCounter(0);
@@ -379,17 +500,12 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     }
   };
 
-  // Discard current page and retake immediately (Fixed full reset of CV tracker)
+  // Discard current page and retake immediately
   const handleRetakeCurrentPage = () => {
     setReviewingPage(null);
     setIsAdjustingCrop(false);
     isCapturingRef.current = false;
     setScannerState("SEARCHING");
-    trackerRef.current.unlock();
-    trackerRef.current.reset(0);
-    lastCvDetectTimeRef.current = 0;
-    lastTrackResultRef.current = null;
-    lastDetectionRef.current = null;
     setDetectedQuad(null);
     setLatestQuality(null);
     setLatestCardSide(null);
@@ -421,9 +537,9 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     setIsAdjustingCrop(false);
   };
 
-  // Real-time detection & 4-corner polygon tracking loop with Temporal Filter & Thermal Optimization
+  // Real-time Canvas Rendering for Adobe Scan polygon overlay
   useEffect(() => {
-    const processFrame = () => {
+    const renderLoop = () => {
       const video = videoRef.current;
       const overlay = overlayCanvasRef.current;
       const currentState = currentScannerStateRef.current;
@@ -442,77 +558,11 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         if (ctx) {
           ctx.clearRect(0, 0, vw, vh);
 
-          // If currently in REVIEW or CAPTURING, skip detection calculation
-          if (currentState === "REVIEW" || isCapturingRef.current) {
-            animFrameId.current = requestAnimationFrame(processFrame);
-            return;
-          }
-
-          const targetAspect = mode === "cccd" || mode === "driver_license" ? "card" : "document";
-          const now = performance.now();
-          const shouldRunDetection = (now - lastCvDetectTimeRef.current >= 85) || !lastTrackResultRef.current;
-
-          let detection = lastDetectionRef.current;
-          let trackResult = lastTrackResultRef.current;
-
-          if (shouldRunDetection) {
-            lastCvDetectTimeRef.current = now;
-
-            // 1. Raw Edge & Contour Detection (Run at optimized ~11-12 FPS to eliminate overheating)
-            detection = CVEngine.detectDocumentQuad(
-              video,
-              video.videoWidth,
-              video.videoHeight,
-              targetAspect
-            );
-            lastDetectionRef.current = detection;
-
-            setLatestQuality(detection.quality || null);
-            setLatestCardSide(detection.cardSide || null);
-
-            // 2. Tracking & Temporal Smoothing via DocumentTracker
-            trackResult = trackerRef.current.update(
-              detection.isRealQuad ? detection.quad : null,
-              detection.confidence,
-              video.videoWidth,
-              video.videoHeight,
-              detection.quality,
-              detection.cardSide,
-              mode === "cccd" || mode === "driver_license" ? cardSide : undefined
-            );
-            lastTrackResultRef.current = trackResult;
-
-            setIsDetected(trackResult.isDetected);
-            setStabilityScore(trackResult.stabilityScore);
-            setConfidenceScore(Math.round(trackResult.confidence * 100));
-            setSteadyCounter(trackResult.stableFrames);
-
-            // Long search hint logic (>7.5s without real detection)
-            if (trackResult.isDetected) {
-              searchStartTimeRef.current = Date.now();
-              setShowSearchHint(false);
-            } else {
-              if (Date.now() - searchStartTimeRef.current > 7500) {
-                setShowSearchHint(true);
-              }
-            }
-
-            // Update State Machine
-            if (trackResult.isReadyForCapture) {
-              setScannerState("READY");
-            } else if (trackResult.isDetected && trackResult.stabilityScore >= 50) {
-              setScannerState("STABILIZING");
-            } else if (trackResult.isDetected) {
-              setScannerState("DETECTING");
-            } else {
-              setScannerState("SEARCHING");
-            }
-          }
-
-          if (trackResult) {
-            // 3. Accurate coordinate mapping from video space to screen space considering CSS object-cover
+          if (currentState !== "REVIEW" && !isCapturingRef.current) {
             const vidW = video.videoWidth || 1280;
             const vidH = video.videoHeight || 720;
+            const targetAspect = mode === "cccd" || mode === "driver_license" ? "card" : "document";
+
             const renderScale = Math.max(vw / vidW, vh / vidH);
             const renderW = vidW * renderScale;
             const renderH = vidH * renderScale;
@@ -525,12 +575,12 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
             });
 
             let curScreen: QuadPoints;
-            if (trackResult.smoothedQuad) {
+            if (detectedQuad) {
               curScreen = {
-                topLeft: mapToScreen(trackResult.smoothedQuad.topLeft),
-                topRight: mapToScreen(trackResult.smoothedQuad.topRight),
-                bottomRight: mapToScreen(trackResult.smoothedQuad.bottomRight),
-                bottomLeft: mapToScreen(trackResult.smoothedQuad.bottomLeft),
+                topLeft: mapToScreen(detectedQuad.topLeft),
+                topRight: mapToScreen(detectedQuad.topRight),
+                bottomRight: mapToScreen(detectedQuad.bottomRight),
+                bottomLeft: mapToScreen(detectedQuad.bottomLeft),
               };
             } else {
               const defQ = CVEngine.getDefaultQuad(vidW, vidH, targetAspect);
@@ -546,8 +596,9 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
             const p1 = curScreen.topRight;
             const p2 = curScreen.bottomRight;
             const p3 = curScreen.bottomLeft;
+            const now = performance.now();
 
-            // 4. Render stabilized polygon overlay (Adobe Scan Style)
+            // Render stabilized polygon overlay (Adobe Scan Style)
             ctx.save();
             ctx.beginPath();
             ctx.moveTo(p0.x, p0.y);
@@ -556,22 +607,21 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
             ctx.lineTo(p3.x, p3.y);
             ctx.closePath();
 
-            const isReady = trackResult.isReadyForCapture;
-            const isStabilizing = trackResult.isDetected && trackResult.stabilityScore >= 50;
-            const isDetected = trackResult.isDetected;
+            const isReady = currentState === "READY";
+            const isStabilizing = currentState === "STABILIZING";
 
             if (isReady) {
               ctx.strokeStyle = "#10b981"; // Emerald green
               ctx.lineWidth = 3.5;
-              ctx.fillStyle = "rgba(16, 185, 129, 0.20)";
+              ctx.fillStyle = "rgba(16, 185, 129, 0.22)";
               ctx.shadowColor = "#10b981";
-              ctx.shadowBlur = 16;
+              ctx.shadowBlur = 18;
             } else if (isStabilizing) {
               ctx.strokeStyle = "#00d2ff"; // Adobe Scan Electric Cyan
               ctx.lineWidth = 3.0;
-              ctx.fillStyle = "rgba(0, 210, 255, 0.12)";
+              ctx.fillStyle = "rgba(0, 210, 255, 0.14)";
               ctx.shadowColor = "#00d2ff";
-              ctx.shadowBlur = 12;
+              ctx.shadowBlur = 14;
             } else if (isDetected) {
               ctx.strokeStyle = "#3b82f6"; // Primary Blue
               ctx.lineWidth = 2.4;
@@ -579,7 +629,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
               ctx.shadowColor = "#3b82f6";
               ctx.shadowBlur = 8;
             } else {
-              ctx.strokeStyle = "rgba(255, 255, 255, 0.40)";
+              ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
               ctx.lineWidth = 1.6;
               ctx.fillStyle = "rgba(255, 255, 255, 0.03)";
               ctx.setLineDash([8, 8]);
@@ -589,14 +639,13 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
             ctx.stroke();
             ctx.restore();
 
-            // 5. Draw Adobe Scan-style 4 Glowing Corner Pins with Expanding Pulse Radar
+            // Draw Adobe Scan-style 4 Glowing Corner Pins with Expanding Pulse Radar
             const drawAdobeCorner = (pt: Point, angleDeg: number) => {
               ctx.save();
               ctx.translate(pt.x, pt.y);
 
-              // 1. Expanding Outward Radar Pulse Wave
-              const pulsePhase1 = ((now * 0.003) % 1); // 0 to 1
-              const pulsePhase2 = (((now * 0.003) + 0.5) % 1);
+              const pulsePhase1 = (now * 0.003) % 1;
+              const pulsePhase2 = (now * 0.003 + 0.5) % 1;
 
               const radarColor = isReady
                 ? "rgba(16, 185, 129, "
@@ -626,7 +675,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
               ctx.fillStyle = radarColor + "0.3)";
               ctx.fill();
 
-              // Inner solid pin circle with crisp white border
+              // Inner solid pin circle
               ctx.beginPath();
               ctx.arc(0, 0, isReady ? 6.5 : 5.5, 0, Math.PI * 2);
               ctx.fillStyle = isReady ? "#10b981" : isStabilizing ? "#00d2ff" : isDetected ? "#3b82f6" : "#ffffff";
@@ -635,7 +684,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
               ctx.strokeStyle = "#ffffff";
               ctx.stroke();
 
-              // Precision Corner Angle Bracket (Adobe Scan Crosshair L-Bracket)
+              // Precision Corner Angle Bracket
               ctx.rotate((angleDeg * Math.PI) / 180);
               ctx.beginPath();
               ctx.moveTo(0, 26);
@@ -654,34 +703,19 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
             drawAdobeCorner(p1, 90);
             drawAdobeCorner(p2, 180);
             drawAdobeCorner(p3, 270);
-
-            setDetectedQuad(trackResult.smoothedQuad || (detection?.isRealQuad ? detection.quad : null));
             setScreenQuad(curScreen);
-
-            // 6. Update Guidance Message
-            setGuidance(trackResult.guidance);
-
-            // 7. Auto Capture Triggering (Strictly when isReadyForCapture === true)
-            if (
-              autoCapture &&
-              trackResult.isReadyForCapture &&
-              !isCapturingRef.current &&
-              currentScannerStateRef.current !== "REVIEW"
-            ) {
-              captureFrame(trackResult.smoothedQuad || undefined);
-            }
           }
         }
       }
 
-      animFrameId.current = requestAnimationFrame(processFrame);
+      animFrameId.current = requestAnimationFrame(renderLoop);
     };
 
-    animFrameId.current = requestAnimationFrame(processFrame);
+    animFrameId.current = requestAnimationFrame(renderLoop);
     return () => {
       if (animFrameId.current) cancelAnimationFrame(animFrameId.current);
     };
-  }, [autoCapture, mode, cardSide, captureFrame]);
+  }, [detectedQuad, isDetected, mode]);
 
   // Process an image data URL (from gallery, clipboard, or sample)
   const processImageSource = useCallback((dataUrl: string) => {
@@ -691,7 +725,6 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
       let selectedQuad: QuadPoints;
 
       if (isCard) {
-        // For CCCD/GPLX: Crop centered ~70% region (15% margin on 4 sides) instead of 100% full frame
         const marginX = img.naturalWidth * 0.15;
         const marginY = img.naturalHeight * 0.15;
         selectedQuad = {
@@ -701,7 +734,6 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           bottomLeft: { x: marginX, y: img.naturalHeight - marginY },
         };
       } else {
-        // For Document: Full outer corners
         selectedQuad = {
           topLeft: { x: 0, y: 0 },
           topRight: { x: img.naturalWidth, y: 0 },
@@ -731,7 +763,6 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
 
       setReviewingPage(newPage);
       setScannerState("REVIEW");
-      trackerRef.current.setCooldown(5000);
     };
     img.src = dataUrl;
   }, [mode, cardSide]);
@@ -816,10 +847,29 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
 
   return (
     <div className="fixed inset-0 z-40 flex flex-col bg-black text-white select-none h-screen min-h-screen w-full overflow-hidden">
-      {/* Visual Shutter Flash Effect (Doubled duration for clear feedback) */}
+      {/* Visual Shutter Flash Effect */}
       {isFlashing && (
         <div className="absolute inset-0 z-50 bg-white opacity-95 pointer-events-none transition-opacity duration-500" />
       )}
+
+      {/* Adobe Scan Flying / Jump Thumbnail Animation */}
+      <AnimatePresence>
+        {jumpAnimationImage && (
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0.9, x: "-50%", y: "-50%", left: "50%", top: "50%" }}
+            animate={{
+              scale: [0.9, 1.05, 0.25],
+              opacity: [0.9, 1, 0],
+              left: ["50%", "50%", "20%"],
+              top: ["50%", "50%", "88%"],
+            }}
+            transition={{ duration: 0.65, ease: [0.16, 1, 0.3, 1] }}
+            className="fixed z-50 w-72 h-96 rounded-2xl overflow-hidden border-2 border-emerald-400 shadow-2xl shadow-emerald-500/50 pointer-events-none"
+          >
+            <img src={jumpAnimationImage} alt="Captured preview" className="w-full h-full object-cover" />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Duplicate Page / Side Warning Toast */}
       {duplicateWarning && (
@@ -843,20 +893,75 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           <span className="text-xs font-semibold hidden xs:inline">Quay lại</span>
         </button>
 
-        {/* Guidance Pill */}
-        <div className="flex items-center gap-2 px-3.5 py-2 rounded-full bg-slate-900/90 backdrop-blur border border-slate-700/60 shadow-lg text-xs font-medium text-slate-200 max-w-[220px] sm:max-w-xs truncate">
-          {scannerState === "READY" ? (
-            <div className="flex items-center gap-1.5 text-emerald-400 font-semibold truncate">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping shrink-0" />
-              <span className="truncate">{guidance}</span>
+        {/* Engine Badge / Selector Pill */}
+        <div className="relative">
+          <button
+            id="btn-scanner-engine-badge"
+            onClick={() => setShowEngineMenu((prev) => !prev)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-900/90 backdrop-blur border border-slate-700/60 shadow-md text-xs font-medium text-slate-200 hover:bg-slate-800 transition active:scale-95"
+            title="Đổi Engine nhận diện"
+          >
+            <Cpu className="w-3.5 h-3.5 text-cyan-400" />
+            <span className="text-[11px] font-semibold text-cyan-200">
+              {activeEngineType === "autocapture"
+                ? "⚡ ML AutoCapture"
+                : activeEngineType === "scanic"
+                ? "🚀 Scanic WASM"
+                : "🍃 Classic CV"}
+            </span>
+          </button>
+
+          {/* Engine Dropdown Menu */}
+          {showEngineMenu && (
+            <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 w-64 p-2 rounded-2xl bg-slate-900/95 backdrop-blur-xl border border-slate-700 shadow-2xl z-50 flex flex-col gap-1">
+              <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                Chọn Engine Quét
+              </div>
+              <button
+                onClick={() => handleSwitchEngine("autocapture")}
+                className={`flex items-center justify-between p-2 rounded-xl text-xs font-medium transition ${
+                  activeEngineType === "autocapture"
+                    ? "bg-cyan-600/20 text-cyan-300 border border-cyan-500/40"
+                    : "text-slate-200 hover:bg-slate-800"
+                }`}
+              >
+                <div className="flex flex-col text-left">
+                  <span className="font-semibold">⚡ ML AutoCapture (Gốc)</span>
+                  <span className="text-[10px] text-slate-400">Adobe-grade ML + COCO-SSD</span>
+                </div>
+                {activeEngineType === "autocapture" && <Check className="w-4 h-4 text-cyan-400" />}
+              </button>
+
+              <button
+                onClick={() => handleSwitchEngine("scanic")}
+                className={`flex items-center justify-between p-2 rounded-xl text-xs font-medium transition ${
+                  activeEngineType === "scanic"
+                    ? "bg-blue-600/20 text-blue-300 border border-blue-500/40"
+                    : "text-slate-200 hover:bg-slate-800"
+                }`}
+              >
+                <div className="flex flex-col text-left">
+                  <span className="font-semibold">🚀 Scanic (WASM Cực nhanh)</span>
+                  <span className="text-[10px] text-slate-400">WASM + ML Fallback</span>
+                </div>
+                {activeEngineType === "scanic" && <Check className="w-4 h-4 text-blue-400" />}
+              </button>
+
+              <button
+                onClick={() => handleSwitchEngine("jscanify")}
+                className={`flex items-center justify-between p-2 rounded-xl text-xs font-medium transition ${
+                  activeEngineType === "jscanify"
+                    ? "bg-emerald-600/20 text-emerald-300 border border-emerald-500/40"
+                    : "text-slate-200 hover:bg-slate-800"
+                }`}
+              >
+                <div className="flex flex-col text-left">
+                  <span className="font-semibold">🍃 Classic CV (Tiết kiệm pin)</span>
+                  <span className="text-[10px] text-slate-400">Thuần Canvas cho máy yếu</span>
+                </div>
+                {activeEngineType === "jscanify" && <Check className="w-4 h-4 text-emerald-400" />}
+              </button>
             </div>
-          ) : isDetected ? (
-            <div className="flex items-center gap-1.5 text-blue-400 font-medium truncate">
-              <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse shrink-0" />
-              <span className="truncate">{guidance}</span>
-            </div>
-          ) : (
-            <span className="truncate text-slate-300">{guidance}</span>
           )}
         </div>
 
@@ -912,7 +1017,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           className="absolute inset-0 w-full h-full pointer-events-none z-10"
         />
 
-        {/* Real-time Quality Meters (Độ nét, Độ sáng, Ổn định) */}
+        {/* Real-time Quality Meters */}
         {isDetected && scannerState !== "REVIEW" && (
           <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-slate-950/85 backdrop-blur border border-slate-700/60 shadow-lg text-[11px]">
             <div className="flex items-center gap-1">
@@ -980,7 +1085,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
                 {scannerState === "READY"
                   ? "Đang tự xử lý chụp ảnh..."
                   : scannerState === "STABILIZING" && autoCapture
-                  ? `Giữ yên tĩnh để chụp (${Math.min(100, Math.round((steadyCounter / 5) * 100))}%)`
+                  ? `Giữ yên tĩnh để chụp (${Math.min(100, Math.round((steadyCounter / 4) * 100))}%)`
                   : isDetected
                   ? "Đã tìm thấy tài liệu • Giữ yên điện thoại"
                   : guidance || "Đang tìm kiếm tài liệu..."}
@@ -1007,7 +1112,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
               <div className="text-[11px] leading-relaxed text-slate-200">
                 <span className="font-semibold text-amber-300">Chưa nhận diện được tài liệu?</span>
                 <p className="text-slate-300 mt-0.5">
-                  Đặt tài liệu trên mặt bàn tối có độ tương phản cao hoặc bấm nút chụp thủ công. Nếu camera bị đơ hoặc nhận diện chậm, hãy bấm làm mới máy ảnh.
+                  Đặt tài liệu trên mặt bàn tối có độ tương phản cao hoặc bấm nút chụp thủ công. Nếu camera bị đơ, hãy bấm làm mới máy ảnh.
                 </p>
               </div>
             </div>
@@ -1088,7 +1193,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         className="hidden"
       />
 
-      {/* REVIEW & JUMPING SHEET MODAL (Auto-Capture is 100% LOCKED here) */}
+      {/* REVIEW & JUMPING SHEET MODAL */}
       <AnimatePresence>
         {scannerState === "REVIEW" && reviewingPage && (
           <motion.div
@@ -1203,7 +1308,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         )}
       </AnimatePresence>
 
-      {/* Manual Crop Adjuster Modal (When user taps "Chỉnh 4 góc") */}
+      {/* Manual Crop Adjuster Modal */}
       {isAdjustingCrop && reviewingPage && (
         <CropAdjuster
           imageSrc={reviewingPage.originalImage}
@@ -1214,7 +1319,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         />
       )}
 
-      {/* Bottom Camera Controller Bar (When not in review mode) */}
+      {/* Bottom Camera Controller Bar */}
       {scannerState !== "REVIEW" && (
         <div className="relative z-30 flex flex-col bg-gradient-to-t from-black/95 via-black/80 to-transparent pt-2 pb-safe px-4">
           {/* Mode Selector Horizontal Scroll */}
@@ -1264,7 +1369,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
             {/* Main Shutter Button with Adobe Scan Circular Progress Countdown */}
             <button
               id="btn-camera-shutter"
-              onClick={() => captureFrame()}
+              onClick={handleManualCapture}
               disabled={scannerState === "CAPTURING"}
               className="relative w-20 h-20 sm:w-22 sm:h-22 rounded-full flex items-center justify-center shadow-2xl active:scale-95 transition-transform group"
               title={autoCapture ? "Tự động chụp khi giữ yên hoặc bấm để chụp ngay" : "Bấm để chụp ảnh"}
@@ -1292,7 +1397,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
                     strokeWidth="4"
                     strokeLinecap="round"
                     strokeDasharray="251.3"
-                    strokeDashoffset={251.3 - (251.3 * Math.min(100, Math.max(0, (steadyCounter / 5) * 100))) / 100}
+                    strokeDashoffset={251.3 - (251.3 * Math.min(100, Math.max(0, (steadyCounter / 4) * 100))) / 100}
                     className="transition-all duration-100 ease-linear"
                   />
                 )}

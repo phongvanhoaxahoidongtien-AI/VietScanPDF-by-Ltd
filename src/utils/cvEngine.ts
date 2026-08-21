@@ -446,7 +446,7 @@ export class CVEngine {
 
     // 8. Map coordinates back to full resolution
     const invScale = 1 / scale;
-    if (bestQuad && bestScore >= 0.22) {
+    if (bestQuad && bestScore >= 0.12) {
       const fullQuad: QuadPoints = {
         topLeft: {
           x: Math.max(0, Math.min(srcWidth, Math.round(bestQuad.topLeft.x * invScale))),

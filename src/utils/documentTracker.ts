@@ -17,13 +17,13 @@ export interface TrackerConfig {
 }
 
 export const DEFAULT_TRACKER_CONFIG: TrackerConfig = {
-  historySize: 12,
-  minConfidenceHigh: 0.16, // Fast, responsive locking onto document edge
-  minConfidenceLow: 0.08,  // Low threshold hysteresis so tracking doesn't drop
-  minStabilityScoreForCapture: 38, // Practical stability threshold for handheld phones
-  minConfidenceForCapture: 0.18,
-  requiredStableFrames: 5, // ~0.5s of holding still before auto-capture
-  maxCornerDriftRatio: 0.075, // 7.5% frame width tolerance for natural hand hold
+  historySize: 10,
+  minConfidenceHigh: 0.12, // Responsive entry barrier to lock onto document fast (like Adobe Scan)
+  minConfidenceLow: 0.05,  // Low threshold hysteresis so tracking doesn't drop
+  minStabilityScoreForCapture: 28, // Practical stability threshold for handheld phones
+  minConfidenceForCapture: 0.12,
+  requiredStableFrames: 4, // ~0.35s - 0.4s of holding still before auto-capture
+  maxCornerDriftRatio: 0.09, // 9% frame width tolerance for natural hand hold
 };
 
 /**
@@ -88,7 +88,14 @@ export class DocumentTracker {
   }
 
   /**
-   * Normalize 4 corners into strictly deterministic order:
+   * Get current smoothed quad points
+   */
+  getSmoothedQuad(): QuadPoints | null {
+    return this.smoothedQuad;
+  }
+
+  /**
+   * STAGE 1 & 2: Normalize 4 corners into strictly deterministic order:
    * P0 = TopLeft, P1 = TopRight, P2 = BottomRight, P3 = BottomLeft.
    */
   static normalize4Corners(points: Point[]): QuadPoints {
@@ -213,7 +220,7 @@ export class DocumentTracker {
     } else {
       if (!currentNormQuad || confidence < this.config.minConfidenceLow) {
         this.lostFramesCount++;
-        if (this.lostFramesCount >= 5) {
+        if (this.lostFramesCount >= 10) {
           this.isDetectedState = false;
           this.smoothedQuad = null;
           this.history = [];
@@ -291,29 +298,33 @@ export class DocumentTracker {
 
     // 3. Multi-frame Stability Calculation (0 to 100)
     let stabilityScore = 0;
-    if (this.isDetectedState && this.history.length >= 4 && this.smoothedQuad) {
-      const cur = this.smoothedQuad;
-      let maxHistoryDrift = 0;
+    if (this.isDetectedState && this.smoothedQuad) {
+      if (this.history.length >= 2) {
+        const cur = this.smoothedQuad;
+        let maxHistoryDrift = 0;
 
-      for (let i = 0; i < this.history.length - 1; i++) {
-        const h = this.history[i];
-        const d0 = DocumentTracker.dist(h.topLeft, cur.topLeft);
-        const d1 = DocumentTracker.dist(h.topRight, cur.topRight);
-        const d2 = DocumentTracker.dist(h.bottomRight, cur.bottomRight);
-        const d3 = DocumentTracker.dist(h.bottomLeft, cur.bottomLeft);
-        const m = Math.max(d0, d1, d2, d3);
-        if (m > maxHistoryDrift) maxHistoryDrift = m;
+        for (let i = 0; i < this.history.length - 1; i++) {
+          const h = this.history[i];
+          const d0 = DocumentTracker.dist(h.topLeft, cur.topLeft);
+          const d1 = DocumentTracker.dist(h.topRight, cur.topRight);
+          const d2 = DocumentTracker.dist(h.bottomRight, cur.bottomRight);
+          const d3 = DocumentTracker.dist(h.bottomLeft, cur.bottomLeft);
+          const m = Math.max(d0, d1, d2, d3);
+          if (m > maxHistoryDrift) maxHistoryDrift = m;
+        }
+
+        const curArea = DocumentTracker.calcQuadArea(cur);
+        const prevArea = DocumentTracker.calcQuadArea(this.history[0]);
+        const areaDeltaPct = Math.abs(curArea - prevArea) / Math.max(1, curArea);
+
+        const driftScore = Math.max(0, 100 - (maxHistoryDrift / driftThreshold) * 75);
+        const areaScore = Math.max(0, 100 - areaDeltaPct * 200);
+
+        stabilityScore = Math.round(driftScore * 0.7 + areaScore * 0.3);
+        stabilityScore = Math.max(0, Math.min(100, stabilityScore));
+      } else {
+        stabilityScore = 55;
       }
-
-      const curArea = DocumentTracker.calcQuadArea(cur);
-      const prevArea = DocumentTracker.calcQuadArea(this.history[0]);
-      const areaDeltaPct = Math.abs(curArea - prevArea) / Math.max(1, curArea);
-
-      const driftScore = Math.max(0, 100 - (maxHistoryDrift / driftThreshold) * 80);
-      const areaScore = Math.max(0, 100 - areaDeltaPct * 250);
-
-      stabilityScore = Math.round(driftScore * 0.7 + areaScore * 0.3);
-      stabilityScore = Math.max(0, Math.min(100, stabilityScore));
     }
 
     this.lastStabilityScore = stabilityScore;
