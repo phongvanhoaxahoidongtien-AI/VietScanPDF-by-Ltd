@@ -226,7 +226,8 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
       setIsFlashing(true);
       triggerCaptureFeedback();
 
-      setTimeout(() => setIsFlashing(false), 140);
+      // Increased flash / shutter animation duration (doubled for clear tactile feedback)
+      setTimeout(() => setIsFlashing(false), 320);
 
       const video = videoRef.current;
       const vw = video.videoWidth || 1280;
@@ -592,15 +593,30 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         const dataUrl = event.target?.result as string;
         const img = new Image();
         img.onload = () => {
-          // Default to widest frame (4 full outer corners) as requested by user
-          const fullQuad: QuadPoints = {
-            topLeft: { x: 0, y: 0 },
-            topRight: { x: img.naturalWidth, y: 0 },
-            bottomRight: { x: img.naturalWidth, y: img.naturalHeight },
-            bottomLeft: { x: 0, y: img.naturalHeight },
-          };
+          const isCard = mode === "cccd" || mode === "driver_license";
+          let selectedQuad: QuadPoints;
 
-          const warped = CVEngine.warpPerspective(img, fullQuad);
+          if (isCard) {
+            // For CCCD/GPLX: Crop centered ~70% region (15% margin on 4 sides) instead of 100% full frame
+            const marginX = img.naturalWidth * 0.15;
+            const marginY = img.naturalHeight * 0.15;
+            selectedQuad = {
+              topLeft: { x: marginX, y: marginY },
+              topRight: { x: img.naturalWidth - marginX, y: marginY },
+              bottomRight: { x: img.naturalWidth - marginX, y: img.naturalHeight - marginY },
+              bottomLeft: { x: marginX, y: img.naturalHeight - marginY },
+            };
+          } else {
+            // For Document: Full outer corners
+            selectedQuad = {
+              topLeft: { x: 0, y: 0 },
+              topRight: { x: img.naturalWidth, y: 0 },
+              bottomRight: { x: img.naturalWidth, y: img.naturalHeight },
+              bottomLeft: { x: 0, y: img.naturalHeight },
+            };
+          }
+
+          const warped = CVEngine.warpPerspective(img, selectedQuad);
           const processedCanvas = CVEngine.applyFilter(warped, "document", 0);
           const processedUrl = processedCanvas.toDataURL("image/jpeg", 0.92);
           const pHash = CVEngine.computePerceptualHashFromCanvas(warped);
@@ -609,7 +625,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
             id: `page_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
             originalImage: dataUrl,
             processedImage: processedUrl,
-            quad: fullQuad,
+            quad: selectedQuad,
             filter: "document",
             rotation: 0,
             createdAt: Date.now(),
@@ -637,7 +653,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     <div className="fixed inset-0 z-40 flex flex-col bg-black text-white select-none h-screen min-h-screen w-full overflow-hidden">
       {/* Visual Shutter Flash Effect */}
       {isFlashing && (
-        <div className="absolute inset-0 z-50 bg-white opacity-85 pointer-events-none transition-opacity duration-140" />
+        <div className="absolute inset-0 z-50 bg-white opacity-85 pointer-events-none transition-opacity duration-300 animate-pulse" />
       )}
 
       {/* Duplicate Page / Side Warning Toast */}

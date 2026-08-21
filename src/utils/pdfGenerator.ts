@@ -106,54 +106,68 @@ export class PDFGenerator {
     const pageWidth = isLandscape ? (isA5 ? 210 : 297) : (isA5 ? 148 : 210);
     const pageHeight = isLandscape ? (isA5 ? 148 : 210) : (isA5 ? 210 : 297);
 
-    // Standard Vietnamese ID card / CCCD / GPLX print size is 85.6mm x 53.98mm
-    const cardWidthMm = isA5 ? 90 : 105;
-    const cardHeightMm = cardWidthMm / 1.586; // ~66mm on A4
+    // Standard Vietnamese ID card / CCCD / GPLX print size (ISO/IEC 7810 ID-1: 85.60mm x 53.98mm)
+    const cardWidthMm = 85.6;
+    const cardHeightMm = 53.98;
 
     const frontPage = doc.pages[0];
-    const backPage = doc.pages[1] || doc.pages[0];
+    const backPage = doc.pages.length > 1 ? doc.pages[1] : null;
 
     if (isLandscape) {
-      // Side by side in Landscape
-      const gapMm = 18;
-      const totalWidth = cardWidthMm * 2 + gapMm;
-      const startX = (pageWidth - totalWidth) / 2;
-      const startY = (pageHeight - cardHeightMm) / 2;
+      if (backPage) {
+        // Side by side in Landscape
+        const gapMm = 20;
+        const totalWidth = cardWidthMm * 2 + gapMm;
+        const startX = (pageWidth - totalWidth) / 2;
+        const startY = (pageHeight - cardHeightMm) / 2;
 
-      // Front
-      pdf.addImage(frontPage.processedImage, "JPEG", startX, startY, cardWidthMm, cardHeightMm, undefined, "FAST");
-      // Back
-      pdf.addImage(
-        backPage.processedImage,
-        "JPEG",
-        startX + cardWidthMm + gapMm,
-        startY,
-        cardWidthMm,
-        cardHeightMm,
-        undefined,
-        "FAST"
-      );
+        // Front
+        pdf.addImage(frontPage.processedImage, "JPEG", startX, startY, cardWidthMm, cardHeightMm, undefined, "FAST");
+        // Back
+        pdf.addImage(
+          backPage.processedImage,
+          "JPEG",
+          startX + cardWidthMm + gapMm,
+          startY,
+          cardWidthMm,
+          cardHeightMm,
+          undefined,
+          "FAST"
+        );
+      } else {
+        // Single card centered in Landscape
+        const startX = (pageWidth - cardWidthMm) / 2;
+        const startY = (pageHeight - cardHeightMm) / 2;
+        pdf.addImage(frontPage.processedImage, "JPEG", startX, startY, cardWidthMm, cardHeightMm, undefined, "FAST");
+      }
     } else {
-      // Stacked vertically in Portrait (Standard administrative style in Vietnam)
-      const gapMm = 24;
-      const totalHeight = cardHeightMm * 2 + gapMm;
-      const startX = (pageWidth - cardWidthMm) / 2;
-      const startY = (pageHeight - totalHeight) / 2;
+      if (backPage) {
+        // Stacked vertically in Portrait (Standard administrative style in Vietnam)
+        const gapMm = 25; // 25mm spacing between front and back
+        const totalHeight = cardHeightMm * 2 + gapMm;
+        const startX = (pageWidth - cardWidthMm) / 2;
+        const startY = 45; // Start from upper area of A4 page
 
-      // Front card (Top)
-      pdf.addImage(frontPage.processedImage, "JPEG", startX, startY, cardWidthMm, cardHeightMm, undefined, "FAST");
+        // Front card (Top)
+        pdf.addImage(frontPage.processedImage, "JPEG", startX, startY, cardWidthMm, cardHeightMm, undefined, "FAST");
 
-      // Back card (Bottom)
-      pdf.addImage(
-        backPage.processedImage,
-        "JPEG",
-        startX,
-        startY + cardHeightMm + gapMm,
-        cardWidthMm,
-        cardHeightMm,
-        undefined,
-        "FAST"
-      );
+        // Back card (Bottom)
+        pdf.addImage(
+          backPage.processedImage,
+          "JPEG",
+          startX,
+          startY + cardHeightMm + gapMm,
+          cardWidthMm,
+          cardHeightMm,
+          undefined,
+          "FAST"
+        );
+      } else {
+        // Single card in upper center of Portrait A4
+        const startX = (pageWidth - cardWidthMm) / 2;
+        const startY = 60;
+        pdf.addImage(frontPage.processedImage, "JPEG", startX, startY, cardWidthMm, cardHeightMm, undefined, "FAST");
+      }
     }
 
     let fileName = doc.title ? `${doc.title.trim().replace(/[\/\\:*?"<>|]/g, "_").replace(/\s+/g, "_")}.pdf` : generateDocumentFileName({ date: doc.createdAt });

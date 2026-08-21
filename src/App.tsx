@@ -17,6 +17,7 @@ import { PDFSplitModal } from "./components/PDFSplitModal";
 import { PDFHighlightModal } from "./components/PDFHighlightModal";
 import { QRGeneratorModal } from "./components/QRGeneratorModal";
 import { QRScannerModal } from "./components/QRScannerModal";
+import { ImportTypeModal, ImportTypeChoice } from "./components/ImportTypeModal";
 
 export default function App() {
   // Navigation & View States
@@ -41,6 +42,10 @@ export default function App() {
   // QR Code Modals
   const [isQRGeneratorOpen, setIsQRGeneratorOpen] = useState<boolean>(false);
   const [isQRScannerOpen, setIsQRScannerOpen] = useState<boolean>(false);
+
+  // Import Type Modal
+  const [isImportTypeModalOpen, setIsImportTypeModalOpen] = useState<boolean>(false);
+  const [activeImportType, setActiveImportType] = useState<ImportTypeChoice>("document");
 
   const hiddenFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -130,9 +135,17 @@ export default function App() {
     }
   };
 
-  // Import images from device storage
+  // Import images from device storage - prompt choice between Document vs CCCD/GPLX
   const handleImportPhotosFromHome = () => {
-    hiddenFileInputRef.current?.click();
+    setIsImportTypeModalOpen(true);
+  };
+
+  const handleSelectImportType = (type: ImportTypeChoice) => {
+    setActiveImportType(type);
+    setIsImportTypeModalOpen(false);
+    setTimeout(() => {
+      hiddenFileInputRef.current?.click();
+    }, 100);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -142,46 +155,69 @@ export default function App() {
     const fileList: File[] = Array.from(files);
     let loadedCount = 0;
     const newPages: ScannedPage[] = [];
+    const isCardMode = activeImportType === "cccd";
 
-    fileList.forEach((file: File) => {
+    fileList.forEach((file: File, index: number) => {
       const reader = new FileReader();
       reader.onload = (event) => {
         const dataUrl = event.target?.result as string;
         const img = new Image();
         img.onload = () => {
-          // Default to widest frame (4 full outer corners) as requested by user
-          const fullQuad = {
-            topLeft: { x: 0, y: 0 },
-            topRight: { x: img.naturalWidth, y: 0 },
-            bottomRight: { x: img.naturalWidth, y: img.naturalHeight },
-            bottomLeft: { x: 0, y: img.naturalHeight },
-          };
-          const warped = CVEngine.warpPerspective(img, fullQuad);
+          let selectedQuad: any;
+
+          if (isCardMode) {
+            // For CCCD/GPLX: Crop centered ~70% region (15% margin on each side) instead of 100% outer corners
+            const marginX = img.naturalWidth * 0.15;
+            const marginY = img.naturalHeight * 0.15;
+            selectedQuad = {
+              topLeft: { x: marginX, y: marginY },
+              topRight: { x: img.naturalWidth - marginX, y: marginY },
+              bottomRight: { x: img.naturalWidth - marginX, y: img.naturalHeight - marginY },
+              bottomLeft: { x: marginX, y: img.naturalHeight - marginY },
+            };
+          } else {
+            // For Document: 4 outer corners
+            selectedQuad = {
+              topLeft: { x: 0, y: 0 },
+              topRight: { x: img.naturalWidth, y: 0 },
+              bottomRight: { x: img.naturalWidth, y: img.naturalHeight },
+              bottomLeft: { x: 0, y: img.naturalHeight },
+            };
+          }
+
+          const warped = CVEngine.warpPerspective(img, selectedQuad);
           const processedCanvas = CVEngine.applyFilter(warped, "document", 0);
           const processedUrl = processedCanvas.toDataURL("image/jpeg", 0.92);
+          const pHash = CVEngine.computePerceptualHashFromCanvas(warped);
 
           newPages.push({
-            id: `page_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+            id: `page_${Date.now()}_${Math.random().toString(36).substr(2, 5)}_${index}`,
             originalImage: dataUrl,
             processedImage: processedUrl,
-            quad: fullQuad,
+            quad: selectedQuad,
             filter: "document",
             rotation: 0,
             createdAt: Date.now(),
             width: processedCanvas.width,
             height: processedCanvas.height,
+            perceptualHash: pHash,
+            detectedSide: isCardMode ? (index === 0 ? "front" : "back") : undefined,
           });
 
           loadedCount++;
           if (loadedCount === fileList.length) {
+            // Sort to maintain original selection order
+            const sortedPages = [...newPages].sort((a, b) => a.createdAt - b.createdAt);
+            const category: ScanMode = isCardMode ? "cccd" : "document";
+
             const newDoc: ScannedDocument = {
               id: `doc_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-              title: generateDefaultDocumentTitle(),
-              category: "document",
-              pages: newPages,
+              title: generateDefaultDocumentTitle(category),
+              category: category,
+              pages: sortedPages,
               createdAt: Date.now(),
               updatedAt: Date.now(),
-              thumbnail: newPages[0].processedImage,
+              thumbnail: sortedPages[0].processedImage,
             };
 
             setActiveDocument(newDoc);
@@ -315,6 +351,12 @@ export default function App() {
       {isQRScannerOpen && (
         <QRScannerModal onClose={() => setIsQRScannerOpen(false)} />
       )}
+      {/* Import Type Picker Modal */}
+      <ImportTypeModal
+        isOpen={isImportTypeModalOpen}
+        onClose={() => setIsImportTypeModalOpen(false)}
+        onSelectType={handleSelectImportType}
+      />
     </div>
   );
 }

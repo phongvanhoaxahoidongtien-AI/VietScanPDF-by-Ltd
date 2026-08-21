@@ -4,10 +4,13 @@
  * With duplicate index: VietScan_by_Ltd_tai_lieu_DD_MM_YY_01.pdf
  */
 
+import { ScanMode } from "../types";
+
 export interface FileNameOptions {
   date?: Date | number;
   suffixIndex?: number;
   extension?: "pdf" | "jpg" | "txt";
+  category?: ScanMode;
 }
 
 /**
@@ -22,7 +25,8 @@ export function generateDocumentFileName(options?: FileNameOptions): string {
   const month = String(d.getMonth() + 1).padStart(2, "0");
   const year = String(d.getFullYear()).slice(-2); // 2-digit year, e.g. "26"
 
-  const base = `VietScan_by_Ltd_tai_lieu_${day}_${month}_${year}`;
+  const catLabel = options?.category === "cccd" ? "cccd" : options?.category === "driver_license" ? "gplx" : "tai_lieu";
+  const base = `VietScan_by_Ltd_${catLabel}_${day}_${month}_${year}`;
   const ext = options?.extension || "pdf";
 
   if (options?.suffixIndex && options.suffixIndex > 0) {
@@ -36,11 +40,22 @@ export function generateDocumentFileName(options?: FileNameOptions): string {
 /**
  * Generates standard document title for display and initial document creation
  */
-export function generateDefaultDocumentTitle(date?: Date | number): string {
-  const d = date ? new Date(date) : new Date();
+export function generateDefaultDocumentTitle(categoryOrDate?: ScanMode | Date | number, dateInput?: Date | number): string {
+  let category: ScanMode = "document";
+  let dateVal: Date | number | undefined = undefined;
+
+  if (typeof categoryOrDate === "string") {
+    category = categoryOrDate as ScanMode;
+    dateVal = dateInput;
+  } else {
+    dateVal = categoryOrDate;
+  }
+
+  const d = dateVal ? new Date(dateVal) : new Date();
   const day = String(d.getDate()).padStart(2, "0");
   const month = String(d.getMonth() + 1).padStart(2, "0");
   const year = String(d.getFullYear()).slice(-2);
 
-  return `VietScan_by_Ltd_tai_lieu_${day}_${month}_${year}`;
+  const catLabel = category === "cccd" ? "cccd" : category === "driver_license" ? "gplx" : "tai_lieu";
+  return `VietScan_by_Ltd_${catLabel}_${day}_${month}_${year}`;
 }

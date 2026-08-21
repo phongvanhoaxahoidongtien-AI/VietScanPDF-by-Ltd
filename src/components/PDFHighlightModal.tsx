@@ -45,10 +45,10 @@ const HIGHLIGHT_COLORS = [
 ];
 
 const BRUSH_SIZES = [
-  { label: "Mảnh (Chữ nhỏ)", sizeFactor: 0.008, px: 8 },
-  { label: "Vừa (Dòng chữ)", sizeFactor: 0.016, px: 16 },
-  { label: "Đậm (Tiêu đề)", sizeFactor: 0.028, px: 26 },
-  { label: "Cực đậm (Đoạn)", sizeFactor: 0.045, px: 42 },
+  { label: "Siêu mảnh (Chữ nhỏ)", sizeFactor: 0.006, px: 6 },
+  { label: "Mảnh (Chữ thường)", sizeFactor: 0.012, px: 12 },
+  { label: "Vừa (Dòng chữ)", sizeFactor: 0.020, px: 20 },
+  { label: "Đậm (Tiêu đề)", sizeFactor: 0.035, px: 35 },
 ];
 
 export const PDFHighlightModal: React.FC<PDFHighlightModalProps> = ({ onClose }) => {
@@ -718,7 +718,11 @@ export const PDFHighlightModal: React.FC<PDFHighlightModalProps> = ({ onClose })
                           />
 
                           {/* Applied Highlights Layer */}
-                          <svg className="absolute inset-0 w-full h-full pointer-events-none overflow-visible">
+                          <svg
+                            className="absolute inset-0 w-full h-full pointer-events-none"
+                            viewBox="0 0 1000 1000"
+                            preserveAspectRatio="none"
+                          >
                             {currentHighlights.map((hl) => {
                               if (
                                 hl.type === "box" &&
@@ -730,10 +734,10 @@ export const PDFHighlightModal: React.FC<PDFHighlightModalProps> = ({ onClose })
                                 return (
                                   <rect
                                     key={hl.id}
-                                    x={`${hl.x * 100}%`}
-                                    y={`${hl.y * 100}%`}
-                                    width={`${hl.w * 100}%`}
-                                    height={`${hl.h * 100}%`}
+                                    x={hl.x * 1000}
+                                    y={hl.y * 1000}
+                                    width={hl.w * 1000}
+                                    height={hl.h * 1000}
                                     fill={hl.color}
                                     fillOpacity={hl.opacity}
                                     rx={2}
@@ -743,20 +747,20 @@ export const PDFHighlightModal: React.FC<PDFHighlightModalProps> = ({ onClose })
                               } else if (hl.type === "path" && hl.points && hl.points.length > 0) {
                                 const d = hl.points.reduce((acc, pt, i) => {
                                   return i === 0
-                                    ? `M ${pt.x * 100} ${pt.y * 100}`
-                                    : `${acc} L ${pt.x * 100} ${pt.y * 100}`;
+                                    ? `M ${(pt.x * 1000).toFixed(1)} ${(pt.y * 1000).toFixed(1)}`
+                                    : `${acc} L ${(pt.x * 1000).toFixed(1)} ${(pt.y * 1000).toFixed(1)}`;
                                 }, "");
+                                const strokeW = (hl.size || 0.016) * 1000;
                                 return (
                                   <path
                                     key={hl.id}
                                     d={d}
                                     fill="none"
                                     stroke={hl.color}
-                                    strokeWidth={`${(hl.size || 0.016) * 100}%`}
+                                    strokeWidth={strokeW}
                                     strokeOpacity={hl.opacity}
                                     strokeLinecap="round"
                                     strokeLinejoin="round"
-                                    vectorEffect="non-scaling-stroke"
                                     style={{ mixBlendMode: "multiply" }}
                                   />
                                 );
@@ -769,30 +773,29 @@ export const PDFHighlightModal: React.FC<PDFHighlightModalProps> = ({ onClose })
                               <path
                                 d={currentPathPoints.reduce((acc, pt, i) => {
                                   return i === 0
-                                    ? `M ${pt.x * 100} ${pt.y * 100}`
-                                    : `${acc} L ${pt.x * 100} ${pt.y * 100}`;
+                                    ? `M ${(pt.x * 1000).toFixed(1)} ${(pt.y * 1000).toFixed(1)}`
+                                    : `${acc} L ${(pt.x * 1000).toFixed(1)} ${(pt.y * 1000).toFixed(1)}`;
                                 }, "")}
                                 fill="none"
                                 stroke={selectedColor}
-                                strokeWidth={`${BRUSH_SIZES[selectedSizeIndex].sizeFactor * 100}%`}
-                                strokeOpacity={0.5}
+                                strokeWidth={BRUSH_SIZES[selectedSizeIndex].sizeFactor * 1000}
+                                strokeOpacity={0.65}
                                 strokeLinecap="round"
                                 strokeLinejoin="round"
-                                vectorEffect="non-scaling-stroke"
                                 style={{ mixBlendMode: "multiply" }}
                               />
                             )}
 
                             {isDrawing && drawTool === "box" && currentDraftBox && (
                               <rect
-                                x={`${currentDraftBox.x * 100}%`}
-                                y={`${currentDraftBox.y * 100}%`}
-                                width={`${currentDraftBox.w * 100}%`}
-                                height={`${currentDraftBox.h * 100}%`}
+                                x={currentDraftBox.x * 1000}
+                                y={currentDraftBox.y * 1000}
+                                width={currentDraftBox.w * 1000}
+                                height={currentDraftBox.h * 1000}
                                 fill={selectedColor}
                                 fillOpacity={0.5}
                                 stroke={selectedColor}
-                                strokeWidth="1"
+                                strokeWidth="2"
                                 rx={2}
                                 style={{ mixBlendMode: "multiply" }}
                               />
