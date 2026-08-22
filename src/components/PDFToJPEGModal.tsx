@@ -846,64 +846,68 @@ export const PDFToJPEGModal: React.FC<PDFToJPEGModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-slate-950 text-slate-100 overflow-hidden select-none animate-in fade-in duration-200">
-      {/* Toast Notification */}
-      {toastMessage && (
-        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-[100] px-4 py-2.5 rounded-2xl bg-blue-600/95 backdrop-blur-md text-white text-xs font-semibold shadow-2xl border border-blue-400/30 flex items-center gap-2 animate-in slide-in-from-top duration-200">
-          <CheckCircle2 className="w-4 h-4 text-emerald-300 shrink-0" />
-          <span>{toastMessage}</span>
-        </div>
-      )}
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 pt-safe-top pb-safe bg-slate-950/90 backdrop-blur-md select-none animate-in fade-in duration-200">
+      <div className="relative w-full max-w-5xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col h-[94vh] max-h-[94vh]">
+        {/* Toast Notification */}
+        {toastMessage && (
+          <div className="fixed top-5 left-1/2 -translate-x-1/2 z-[100] px-4 py-2.5 rounded-2xl bg-blue-600/95 backdrop-blur-md text-white text-xs font-semibold shadow-2xl border border-blue-400/30 flex items-center gap-2 animate-in slide-in-from-top duration-200">
+            <CheckCircle2 className="w-4 h-4 text-emerald-300 shrink-0" />
+            <span>{toastMessage}</span>
+          </div>
+        )}
 
-      {/* Hidden PDF File Input */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="application/pdf"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) handleFileSelected(file);
-          if (fileInputRef.current) fileInputRef.current.value = "";
-        }}
-        className="hidden"
-      />
+        {/* Hidden PDF File Input */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="application/pdf"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) handleFileSelected(file);
+            if (fileInputRef.current) fileInputRef.current.value = "";
+          }}
+          className="hidden"
+        />
 
-      {/* ========================================================
-          STEP 1: SELECT PDF & CONFIGURE EXPORT OPTIONS
-      ======================================================== */}
-      {currentStep === "select" && (
-        <div className="flex flex-col h-full overflow-hidden">
-          {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-900/90 backdrop-blur-md shrink-0">
-            <div className="flex items-center gap-3">
-              <button
-                onClick={onClose}
-                className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
-              >
-                <ArrowLeft className="w-5 h-5" />
-              </button>
-              <div className="flex items-center gap-2">
-                <div className="p-2 rounded-xl bg-gradient-to-tr from-cyan-600 to-blue-600 text-white shadow-sm">
-                  <FileImage className="w-5 h-5" />
+        {/* ========================================================
+            STEP 1: SELECT PDF & CONFIGURE EXPORT OPTIONS
+        ======================================================== */}
+        {currentStep === "select" && (
+          <div className="flex flex-col h-full overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between px-3 sm:px-5 py-3 border-b border-slate-800 bg-slate-900/95 shrink-0 gap-2">
+              <div className="flex items-center gap-2 sm:gap-3">
+                <button
+                  id="btn-pdf-to-jpeg-back"
+                  onClick={onClose}
+                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 active:bg-slate-700 border border-slate-700/80 text-slate-100 hover:text-white active:scale-95 transition text-xs font-semibold shadow-sm min-h-[40px]"
+                >
+                  <ArrowLeft className="w-4 h-4 text-cyan-400" />
+                  <span>Quay lại</span>
+                </button>
+                <div className="hidden xs:flex p-2 rounded-xl bg-gradient-to-tr from-cyan-600 to-blue-600 text-white shadow-sm">
+                  <FileImage className="w-4 h-4" />
                 </div>
                 <div>
-                  <h1 className="text-base font-bold text-white flex items-center gap-2">
+                  <h1 className="text-sm sm:text-base font-bold text-white flex items-center gap-2 leading-tight">
                     PDF to JPEG
                     <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-cyan-500/20 text-cyan-400 border border-cyan-500/30">
                       Chất lượng cao
                     </span>
                   </h1>
-                  <p className="text-[11px] text-slate-400">Chuyển từng trang PDF thành ảnh JPEG sắc nét</p>
+                  <p className="text-[11px] sm:text-xs text-slate-400 hidden sm:block">
+                    Chuyển từng trang PDF thành ảnh JPEG sắc nét
+                  </p>
                 </div>
               </div>
+              <button
+                onClick={onClose}
+                className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition"
+                title="Đóng"
+              >
+                <X className="w-5 h-5" />
+              </button>
             </div>
-            <button
-              onClick={onClose}
-              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
 
           {/* Body Content */}
           <div className="flex-1 overflow-y-auto px-4 py-4 max-w-4xl mx-auto w-full space-y-5">
@@ -1252,28 +1256,33 @@ export const PDFToJPEGModal: React.FC<PDFToJPEGModalProps> = ({
       {currentStep === "gallery" && (
         <div className="flex flex-col h-full overflow-hidden">
           {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-900/90 backdrop-blur-md shrink-0">
-            <div className="flex items-center gap-3">
+          <div className="flex items-center justify-between px-3 sm:px-5 py-3 border-b border-slate-800 bg-slate-900/95 shrink-0 gap-2">
+            <div className="flex items-center gap-2 sm:gap-3">
               <button
+                id="btn-gallery-back-select"
                 onClick={() => setCurrentStep("select")}
-                className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 active:bg-slate-700 border border-slate-700/80 text-slate-100 hover:text-white active:scale-95 transition text-xs font-semibold shadow-sm min-h-[40px]"
               >
-                <ArrowLeft className="w-5 h-5" />
+                <ArrowLeft className="w-4 h-4 text-cyan-400" />
+                <span>Quay lại</span>
               </button>
               <div>
-                <h1 className="text-base font-bold text-white flex items-center gap-2">
+                <h1 className="text-sm sm:text-base font-bold text-white flex items-center gap-2 leading-tight">
                   Danh sách ảnh {outputFormat.toUpperCase()}
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
                     {exportedImages.length} ảnh
                   </span>
                 </h1>
-                <p className="text-[11px] text-slate-400">Xem, chỉnh sửa từng ảnh, lưu vào app hoặc tải file ZIP</p>
+                <p className="text-[11px] sm:text-xs text-slate-400 hidden sm:block">
+                  Xem, chỉnh sửa từng ảnh, lưu vào app hoặc tải file ZIP
+                </p>
               </div>
             </div>
 
             <button
               onClick={onClose}
               className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition"
+              title="Đóng"
             >
               <X className="w-5 h-5" />
             </button>
@@ -1429,19 +1438,23 @@ export const PDFToJPEGModal: React.FC<PDFToJPEGModalProps> = ({
       {currentStep === "editor" && currentEditingItem && (
         <div className="flex flex-col h-full bg-slate-950 overflow-hidden">
           {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-900/90 backdrop-blur-md shrink-0">
-            <div className="flex items-center gap-3">
+          <div className="flex items-center justify-between px-3 sm:px-5 py-3 border-b border-slate-800 bg-slate-900/95 shrink-0 gap-2">
+            <div className="flex items-center gap-2 sm:gap-3">
               <button
+                id="btn-editor-back-gallery"
                 onClick={() => setCurrentStep("gallery")}
-                className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 active:bg-slate-700 border border-slate-700/80 text-slate-100 hover:text-white active:scale-95 transition text-xs font-semibold shadow-sm min-h-[40px]"
               >
-                <ArrowLeft className="w-5 h-5" />
+                <ArrowLeft className="w-4 h-4 text-cyan-400" />
+                <span>Quay lại</span>
               </button>
               <div>
-                <h1 className="text-sm font-bold text-white flex items-center gap-2">
-                  Chỉnh sửa ảnh Trang {currentEditingItem.originalPageNumber}
+                <h1 className="text-sm font-bold text-white flex items-center gap-2 leading-tight">
+                  Chỉnh sửa Trang {currentEditingItem.originalPageNumber}
                 </h1>
-                <p className="text-[10px] text-slate-400">Xoay, lật, cắt, điều chỉnh độ sáng, tương phản & bộ lọc</p>
+                <p className="text-[10px] sm:text-xs text-slate-400 hidden sm:block">
+                  Xoay, lật, cắt, điều chỉnh độ sáng, tương phản & bộ lọc
+                </p>
               </div>
             </div>
 
@@ -1461,16 +1474,16 @@ export const PDFToJPEGModal: React.FC<PDFToJPEGModalProps> = ({
                 className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition"
               >
                 <Undo className="w-3.5 h-3.5" />
-                <span>Đặt lại</span>
+                <span className="hidden xs:inline">Đặt lại</span>
               </button>
 
               <button
                 id="btn-save-single-image"
                 onClick={() => handleSaveEditorChanges(false)}
-                className="px-4 py-1.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold shadow-md shadow-cyan-600/30 flex items-center gap-1.5 transition"
+                className="px-3.5 py-1.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold shadow-md shadow-cyan-600/30 flex items-center gap-1.5 transition"
               >
                 <Check className="w-3.5 h-3.5" />
-                <span>Lưu ảnh này</span>
+                <span>Lưu ảnh</span>
               </button>
             </div>
           </div>
@@ -1708,6 +1721,7 @@ export const PDFToJPEGModal: React.FC<PDFToJPEGModalProps> = ({
           </div>
         </div>
       )}
+      </div>
 
       {/* ========================================================
           ZOOM PREVIEW MODAL

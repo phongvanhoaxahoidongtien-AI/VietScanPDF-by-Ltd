@@ -716,22 +716,25 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           )}
 
           {/* TOP BAR: Controls & Mode Switchers */}
-          <div className="relative z-20 pt-3 px-4 pb-2 flex flex-col gap-2.5 bg-gradient-to-b from-black/90 via-black/50 to-transparent">
+          <div className="relative z-30 pt-safe-top pt-4 px-4 pb-3 flex flex-col gap-3 bg-gradient-to-b from-black/95 via-black/80 to-transparent shrink-0">
             <div className="flex items-center justify-between">
               {/* Back / Close Button */}
               <button
+                id="btn-camera-back"
                 onClick={onClose}
-                className="w-10 h-10 rounded-full bg-slate-900/80 backdrop-blur border border-slate-700/60 flex items-center justify-center text-slate-200 active:scale-95 transition-all"
-                title="Đóng Camera"
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-slate-900/90 hover:bg-slate-850 active:bg-slate-800 backdrop-blur-md border border-slate-700/80 text-slate-100 hover:text-white active:scale-95 transition-all shadow-lg min-h-[42px] shrink-0"
+                title="Quay lại màn hình chính"
               >
-                <ArrowLeft className="w-5 h-5" />
+                <ArrowLeft className="w-4 h-4 text-blue-400" />
+                <span className="text-xs font-bold pr-1">Quay lại</span>
               </button>
 
               {/* Capture Mode Toggle: Từng trang (Mặc định) vs Chụp liên tục */}
-              <div className="flex items-center p-1 rounded-full bg-slate-950/85 backdrop-blur border border-slate-800 shadow-lg">
+              <div className="flex items-center p-1 rounded-full bg-slate-950/90 backdrop-blur-md border border-slate-800 shadow-lg">
                 <button
+                  id="btn-capture-mode-single"
                   onClick={() => setCaptureMode("single")}
-                  className={`px-3 py-1 rounded-full text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                  className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all flex items-center gap-1.5 ${
                     captureMode === "single"
                       ? "bg-blue-600 text-white shadow-md shadow-blue-600/30"
                       : "text-slate-400 hover:text-slate-200"
@@ -741,8 +744,9 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
                   Từng trang
                 </button>
                 <button
+                  id="btn-capture-mode-batch"
                   onClick={() => setCaptureMode("batch")}
-                  className={`px-3 py-1 rounded-full text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                  className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all flex items-center gap-1.5 ${
                     captureMode === "batch"
                       ? "bg-blue-600 text-white shadow-md shadow-blue-600/30"
                       : "text-slate-400 hover:text-slate-200"
@@ -940,21 +944,23 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
       {reviewPage && !isAdjustingCrop && (
         <div className="relative w-full h-full flex flex-col justify-between bg-slate-950 z-30">
           {/* Top Bar */}
-          <div className="pt-4 px-4 pb-3 flex items-center justify-between border-b border-slate-800/80 bg-slate-900/60 backdrop-blur">
+          <div className="pt-safe-top pt-4 px-4 pb-3 flex items-center justify-between border-b border-slate-800/80 bg-slate-900/95 backdrop-blur shrink-0">
             <button
+              id="btn-review-retake"
               onClick={handleRetakeSinglePage}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-medium hover:bg-slate-700 transition-colors"
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 active:bg-slate-700 border border-slate-700/80 text-slate-100 hover:text-white text-xs font-semibold active:scale-95 transition-colors min-h-[40px]"
             >
-              <RotateCcw className="w-4 h-4" />
-              Chụp lại
+              <ArrowLeft className="w-4 h-4 text-blue-400" />
+              <span>Quay lại</span>
             </button>
             <span className="text-sm font-semibold text-white">Xem trước & Bộ lọc</span>
             <button
+              id="btn-review-crop"
               onClick={() => setIsAdjustingCrop(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600/20 border border-blue-500/40 text-blue-400 text-xs font-medium hover:bg-blue-600/30 transition-colors"
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600/20 border border-blue-500/40 text-blue-400 text-xs font-semibold hover:bg-blue-600/30 transition-colors min-h-[40px]"
             >
               <Crop className="w-4 h-4" />
-              Cắt 4 góc
+              <span>Cắt 4 góc</span>
             </button>
           </div>
 
@@ -1066,13 +1072,14 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
       {showBatchGallery && (
         <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col justify-between">
           {/* Header */}
-          <div className="pt-4 px-4 pb-3 flex items-center justify-between border-b border-slate-800 bg-slate-900/80 backdrop-blur">
+          <div className="pt-safe-top pt-4 px-4 pb-3 flex items-center justify-between border-b border-slate-800 bg-slate-900/95 backdrop-blur shrink-0">
             <button
+              id="btn-batch-back"
               onClick={() => setShowBatchGallery(false)}
-              className="flex items-center gap-1 text-slate-300 hover:text-white text-sm font-medium"
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 active:bg-slate-700 border border-slate-700/80 text-slate-100 hover:text-white active:scale-95 transition text-xs font-semibold min-h-[40px]"
             >
-              <ArrowLeft className="w-5 h-5" />
-              Tiếp tục chụp
+              <ArrowLeft className="w-4 h-4 text-emerald-400" />
+              <span>Quay lại chụp</span>
             </button>
             <span className="text-sm font-bold text-white">
               Đã chụp {batchPages.length} trang
@@ -1080,7 +1087,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
             <button
               onClick={() => setBatchPages([])}
               disabled={batchPages.length === 0}
-              className="text-red-400 hover:text-red-300 text-xs font-medium disabled:opacity-30"
+              className="px-3 py-1.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-semibold border border-red-500/30 disabled:opacity-30 transition"
             >
               Xóa tất cả
             </button>
