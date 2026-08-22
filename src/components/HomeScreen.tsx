@@ -15,6 +15,7 @@ import {
   Highlighter,
   QrCode,
   ScanLine,
+  FileImage,
 } from "lucide-react";
 import { ScanMode, ScannedDocument } from "../types";
 
@@ -24,6 +25,7 @@ interface HomeScreenProps {
   onOpenPDFMerge: () => void;
   onOpenPDFSplit: () => void;
   onOpenPDFHighlight: () => void;
+  onOpenPDFToJPEG: () => void;
   onOpenQRGenerator: () => void;
   onOpenQRScanner: () => void;
   recentDocuments: ScannedDocument[];
@@ -37,6 +39,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onOpenPDFMerge,
   onOpenPDFSplit,
   onOpenPDFHighlight,
+  onOpenPDFToJPEG,
   onOpenQRGenerator,
   onOpenQRScanner,
   recentDocuments,
@@ -159,7 +162,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">PDF Tools</h3>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {/* Merge PDF */}
           <button
             id="btn-tool-merge-pdf"
@@ -202,6 +205,23 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             <div className="min-w-0">
               <h4 className="text-sm font-bold text-white group-hover:text-amber-400 transition">Highlight PDF</h4>
               <p className="text-[11px] text-slate-400 mt-0.5">Bôi vàng văn bản trực quan</p>
+            </div>
+          </button>
+
+          {/* PDF to JPEG */}
+          <button
+            id="btn-tool-pdf-to-jpeg"
+            onClick={onOpenPDFToJPEG}
+            className="flex items-center gap-3.5 p-4 rounded-2xl bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-cyan-500/40 active:scale-[0.98] transition text-left group shadow-sm"
+          >
+            <div className="p-3 rounded-xl bg-cyan-500/10 text-cyan-400 group-hover:bg-cyan-600 group-hover:text-white transition shrink-0">
+              <FileImage className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <h4 className="text-sm font-bold text-white group-hover:text-cyan-400 transition">PDF to JPEG</h4>
+              <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-2">
+                Chuyển từng trang PDF thành ảnh JPEG chất lượng cao, xem & chỉnh sửa trước khi lưu
+              </p>
             </div>
           </button>
         </div>

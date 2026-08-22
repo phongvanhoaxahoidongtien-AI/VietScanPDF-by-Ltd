@@ -2,53 +2,45 @@ import React, { useRef, useState, useEffect, useCallback } from "react";
 import {
   Camera,
   RotateCcw,
+  RotateCw,
   Zap,
   ZapOff,
   Image as ImageIcon,
   Check,
-  Sparkles,
   ArrowLeft,
   AlertCircle,
   FileText,
   CreditCard,
-  Award,
-  IdCard,
   RefreshCw,
   Crop,
   Trash2,
   Plus,
   CheckCircle2,
-  Eye,
-  Sun,
-  ShieldCheck,
-  Smartphone,
-  ClipboardPaste,
   Scan,
-  ScanLine,
-  Cpu,
   Layers,
-  Settings2,
+  Sparkles,
+  X,
+  ChevronRight,
+  Maximize2,
+  SlidersHorizontal,
+  FolderOpen,
+  CameraOff,
+  HelpCircle,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { ScanMode, QuadPoints, ScannedPage, FilterMode, Point, DocumentQualityCheck, CardSideAnalysis } from "../types";
+import {
+  ScanMode,
+  QuadPoints,
+  ScannedPage,
+  FilterMode,
+  Point,
+} from "../types";
 import { CVEngine } from "../utils/cvEngine";
 import { CameraHelper } from "../utils/cameraHelper";
 import { CropAdjuster } from "./CropAdjuster";
-import { ScannerEngineManager } from "../services/scanner/ScannerEngineManager";
-import {
-  ScannerEngineType,
-  EngineDetectionResult,
-  EngineCaptureResult,
-} from "../services/scanner/types";
 
-export type ScannerState =
-  | "INITIALIZING"
-  | "SEARCHING"
-  | "DETECTING"
-  | "STABILIZING"
-  | "READY"
-  | "CAPTURING"
-  | "REVIEW";
+export type FrameRatioType = "a4_portrait" | "a4_landscape" | "card" | "free";
+export type CaptureModeType = "single" | "batch";
 
 interface CameraScannerProps {
   initialMode?: ScanMode;
@@ -65,1434 +57,1108 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
   onClose,
   scannedPagesCount,
 }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const animFrameId = useRef<number | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
-  // Scanner State Machine
-  const [scannerState, setScannerState] = useState<ScannerState>("INITIALIZING");
-  const [mode, setMode] = useState<ScanMode>(initialMode);
-  const [autoCapture, setAutoCapture] = useState<boolean>(false);
+  // Camera & Device State
+  const [isCameraReady, setIsCameraReady] = useState<boolean>(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [facingMode, setFacingMode] = useState<"environment" | "user">("environment");
   const [hasTorch, setHasTorch] = useState<boolean>(false);
   const [torchOn, setTorchOn] = useState<boolean>(false);
-  const [cameraError, setCameraError] = useState<string | null>(null);
-  const [guidance, setGuidance] = useState<string>("Căn tài liệu vào khung 90% & bấm nút chụp");
   const [isFlashing, setIsFlashing] = useState<boolean>(false);
-  const [steadyCounter, setSteadyCounter] = useState<number>(0);
-  const [stabilityScore, setStabilityScore] = useState<number>(0);
-  const [confidenceScore, setConfidenceScore] = useState<number>(0);
-  const [isDetected, setIsDetected] = useState<boolean>(false);
-  const [detectedQuad, setDetectedQuad] = useState<QuadPoints | null>(null);
-  const [screenQuad, setScreenQuad] = useState<QuadPoints | null>(null);
+  const [isStartingCamera, setIsStartingCamera] = useState<boolean>(true);
 
-  // Engine State & Selection
-  const [activeEngineType, setActiveEngineType] = useState<ScannerEngineType>("autocapture");
-  const [activeEngineName, setActiveEngineName] = useState<string>("ML AutoCapture");
-  const [showEngineMenu, setShowEngineMenu] = useState<boolean>(false);
+  // Guided Framing Settings
+  const [frameRatio, setFrameRatio] = useState<FrameRatioType>(
+    initialMode === "cccd" || initialMode === "driver_license"
+      ? "card"
+      : "a4_portrait"
+  );
+  const [guideRect, setGuideRect] = useState<{ x: number; y: number; width: number; height: number }>({
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+  });
 
-  // Quality and Card Side Analysis
-  const [latestQuality, setLatestQuality] = useState<DocumentQualityCheck | null>(null);
-  const [latestCardSide, setLatestCardSide] = useState<CardSideAnalysis | null>(null);
-  const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
+  // Capture System Modes: Single Page vs. Continuous Batch
+  const [captureMode, setCaptureMode] = useState<CaptureModeType>("single");
 
-  // For 2-sided modes (CCCD / Driver License)
-  const [cardSide, setCardSide] = useState<"front" | "back">("front");
-  const [frontPageDraft, setFrontPageDraft] = useState<ScannedPage | null>(null);
-
-  // Page Review & Jumping sheet state
-  const [reviewingPage, setReviewingPage] = useState<ScannedPage | null>(null);
+  // Single-Page Review State
+  const [reviewPage, setReviewPage] = useState<ScannedPage | null>(null);
+  const [activeFilter, setActiveFilter] = useState<FilterMode>("document");
+  const [rotationDeg, setRotationDeg] = useState<number>(0);
   const [isAdjustingCrop, setIsAdjustingCrop] = useState<boolean>(false);
 
-  // Jumping Animation State
-  const [jumpAnimationImage, setJumpAnimationImage] = useState<string | null>(null);
+  // Batch-Mode State (Microsoft Lens Style)
+  const [batchPages, setBatchPages] = useState<ScannedPage[]>([]);
+  const [showBatchGallery, setShowBatchGallery] = useState<boolean>(false);
+  const [selectedBatchIndex, setSelectedBatchIndex] = useState<number | null>(null);
+  const [animatingThumb, setAnimatingThumb] = useState<string | null>(null);
 
-  // Search assistance & Thermal optimization refs
-  const [showSearchHint, setShowSearchHint] = useState<boolean>(false);
-  const searchStartTimeRef = useRef<number>(Date.now());
-  const isCapturingRef = useRef<boolean>(false);
-  const currentScannerStateRef = useRef<ScannerState>("INITIALIZING");
-  const autoCaptureRef = useRef<boolean>(autoCapture);
-  const modeRef = useRef<ScanMode>(mode);
-  const cardSideRef = useRef<"front" | "back">(cardSide);
-  const frontPageDraftRef = useRef<ScannedPage | null>(frontPageDraft);
-
-  // Scanner Engine Manager Instance
-  const engineManagerRef = useRef<ScannerEngineManager>(new ScannerEngineManager());
-
-  // Keep state refs synchronized
-  useEffect(() => {
-    currentScannerStateRef.current = scannerState;
-  }, [scannerState]);
-
-  useEffect(() => {
-    autoCaptureRef.current = autoCapture;
-    engineManagerRef.current.updateConfig({ autoCapture });
-  }, [autoCapture]);
-
-  useEffect(() => {
-    modeRef.current = mode;
-    engineManagerRef.current.updateConfig({ mode });
-  }, [mode]);
-
-  useEffect(() => {
-    cardSideRef.current = cardSide;
-    engineManagerRef.current.updateConfig({ cardSide });
-  }, [cardSide]);
-
-  useEffect(() => {
-    frontPageDraftRef.current = frontPageDraft;
-  }, [frontPageDraft]);
-
-  // Sound and Haptic feedback helper
-  const triggerCaptureFeedback = () => {
+  // Play synthetic camera shutter audio
+  const playShutterSound = useCallback(() => {
     try {
-      if (navigator.vibrate) {
-        navigator.vibrate([60, 40, 90]);
-      }
-      const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
-      if (AudioCtxClass) {
-        const audioCtx = new AudioCtxClass();
-        const now = audioCtx.currentTime;
-
-        // Snappy initial click (mechanical switch / leaf shutter release)
-        const osc1 = audioCtx.createOscillator();
-        const gain1 = audioCtx.createGain();
-        osc1.type = "sine";
-        osc1.frequency.setValueAtTime(2400, now);
-        osc1.frequency.exponentialRampToValueAtTime(320, now + 0.04);
-        gain1.gain.setValueAtTime(0.4, now);
-        gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
-        osc1.connect(gain1);
-        gain1.connect(audioCtx.destination);
-        osc1.start(now);
-        osc1.stop(now + 0.04);
-
-        // Crisp mechanical secondary click (aperture blade rebound)
-        const osc2 = audioCtx.createOscillator();
-        const gain2 = audioCtx.createGain();
-        osc2.type = "triangle";
-        osc2.frequency.setValueAtTime(1800, now + 0.045);
-        osc2.frequency.exponentialRampToValueAtTime(200, now + 0.09);
-        gain2.gain.setValueAtTime(0.35, now + 0.045);
-        gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
-        osc2.connect(gain2);
-        gain2.connect(audioCtx.destination);
-        osc2.start(now + 0.045);
-        osc2.stop(now + 0.09);
-      }
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(900, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(150, ctx.currentTime + 0.08);
+      gain.gain.setValueAtTime(0.3, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.08);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.08);
     } catch {
-      // Autoplay policy fallback
+      // Audio context might be restricted before gesture
     }
-  };
 
-  // Perform High Quality Capture, Warp & Perceptual Anti-Duplicate Verification
-  const processCaptureResult = useCallback(
-    async (capResult: EngineCaptureResult) => {
-      if (currentScannerStateRef.current === "REVIEW" || isCapturingRef.current) return;
-
-      isCapturingRef.current = true;
-      setScannerState("CAPTURING");
-      setIsFlashing(true);
-      triggerCaptureFeedback();
-
-      setTimeout(() => setIsFlashing(false), 650);
-
-      const currentMode = modeRef.current;
-      const currentCardSide = cardSideRef.current;
-      const currentFrontDraft = frontPageDraftRef.current;
-
-      // Extract warped canvas or perform client warp
-      let processedCanvas: HTMLCanvasElement;
-      let pHash = "";
-
-      if (capResult.warpedDataUrl) {
-        const img = new Image();
-        await new Promise<void>((res) => {
-          img.onload = () => res();
-          img.src = capResult.warpedDataUrl!;
-        });
-        const c = document.createElement("canvas");
-        c.width = img.naturalWidth || img.width;
-        c.height = img.naturalHeight || img.height;
-        const ctx = c.getContext("2d");
-        if (ctx) ctx.drawImage(img, 0, 0);
-        const defaultFilter: FilterMode = currentMode === "photo" ? "photo" : "document";
-        processedCanvas = CVEngine.applyFilter(c, defaultFilter, 0);
-        pHash = CVEngine.computePerceptualHashFromCanvas(c);
-      } else {
-        const img = new Image();
-        await new Promise<void>((res) => {
-          img.onload = () => res();
-          img.src = capResult.dataUrl;
-        });
-        const warped = CVEngine.warpPerspective(img, capResult.quad);
-        const defaultFilter: FilterMode = currentMode === "photo" ? "photo" : "document";
-        processedCanvas = CVEngine.applyFilter(warped, defaultFilter, 0);
-        pHash = CVEngine.computePerceptualHashFromCanvas(warped);
-      }
-
-      // Anti-duplicate validation for CCCD / 2-sided card
-      if (
-        (currentMode === "cccd" || currentMode === "driver_license") &&
-        currentCardSide === "back" &&
-        currentFrontDraft?.perceptualHash
-      ) {
-        const similarity = CVEngine.compareHashSimilarity(currentFrontDraft.perceptualHash, pHash);
-        if (similarity > 0.88) {
-          setDuplicateWarning("Ảnh bị trùng với Mặt trước! Vui lòng lật sang Mặt sau của thẻ.");
-          setTimeout(() => setDuplicateWarning(null), 3500);
-          isCapturingRef.current = false;
-          setScannerState("SEARCHING");
-          return;
-        }
-      }
-
-      const processedDataUrl = processedCanvas.toDataURL("image/jpeg", 0.92);
-
-      const newPage: ScannedPage = {
-        id: `page_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-        originalImage: capResult.dataUrl,
-        processedImage: processedDataUrl,
-        quad: capResult.quad,
-        filter: currentMode === "photo" ? "photo" : "document",
-        rotation: 0,
-        createdAt: Date.now(),
-        width: processedCanvas.width,
-        height: processedCanvas.height,
-        perceptualHash: pHash,
-        detectedSide: currentCardSide,
-      };
-
-      // Trigger Jump Animation (Adobe Scan thumbnail fly effect)
-      setJumpAnimationImage(processedDataUrl);
-      setTimeout(() => {
-        setJumpAnimationImage(null);
-      }, 700);
-
-      // Transition to REVIEW state
-      setReviewingPage(newPage);
-      setScannerState("REVIEW");
-      isCapturingRef.current = false;
-    },
-    []
-  );
-
-  // Start Camera Stream & Engine
-  const startCamera = useCallback(async () => {
-    setScannerState("INITIALIZING");
-    setCameraError(null);
-
-    try {
-      if (videoRef.current && videoRef.current.srcObject) {
-        CameraHelper.stopStream(videoRef.current.srcObject as MediaStream);
-      }
-
-      const res = await CameraHelper.acquireStream("environment");
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = res.stream;
-        await videoRef.current.play();
-        setHasTorch(res.hasTorch);
-
-        // Initialize Scanner Engine Manager
-        const manager = engineManagerRef.current;
-        const ok = await manager.initialize(
-          videoRef.current,
-          {
-            autoCapture: autoCaptureRef.current,
-            mode: modeRef.current,
-            cardSide: cardSideRef.current,
-            qualityPreset: "balanced",
-          },
-          "auto"
-        );
-
-        if (ok) {
-          setActiveEngineType(manager.getActiveEngineType() || "autocapture");
-          setActiveEngineName(manager.getActiveEngineName());
-          await manager.start();
-        }
-      }
-
-      setScannerState("SEARCHING");
-      searchStartTimeRef.current = Date.now();
-      setShowSearchHint(false);
-      setGuidance("Đưa tài liệu vào khung hình");
-    } catch (err: any) {
-      console.warn("Camera access warning:", err?.message || err);
-      const friendlyErr = CameraHelper.formatError(err);
-      setCameraError(friendlyErr.message);
-      setScannerState("INITIALIZING");
+    if (typeof navigator !== "undefined" && navigator.vibrate) {
+      try {
+        navigator.vibrate([35, 20, 35]);
+      } catch {}
     }
   }, []);
 
-  // Bind Engine Manager Events
-  useEffect(() => {
-    const manager = engineManagerRef.current;
+  // Compute Guide Frame Dimensions on screen based on container size & selected ratio
+  const updateGuideDimensions = useCallback(() => {
+    if (!containerRef.current) return;
+    const cw = containerRef.current.clientWidth;
+    const ch = containerRef.current.clientHeight;
+    if (cw === 0 || ch === 0) return;
 
-    const unDet = manager.on("detection", (res: EngineDetectionResult) => {
-      if (currentScannerStateRef.current === "REVIEW" || isCapturingRef.current) return;
-
-      setIsDetected(res.isDetected);
-      setStabilityScore(res.stabilityScore);
-      setSteadyCounter(res.stableFrames);
-      setConfidenceScore(Math.round(res.confidence * 100));
-      setDetectedQuad(res.smoothedQuad || res.quad);
-      if (res.quality) setLatestQuality(res.quality);
-      if (res.cardSide) setLatestCardSide(res.cardSide);
-
-      if (res.isDetected) {
-        searchStartTimeRef.current = Date.now();
-        setShowSearchHint(false);
-      } else {
-        if (Date.now() - searchStartTimeRef.current > 7500) {
-          setShowSearchHint(true);
-        }
-      }
-
-      // Update state machine
-      if (res.isReadyForCapture) {
-        setScannerState("READY");
-      } else if (res.isDetected && res.stabilityScore >= 45) {
-        setScannerState("STABILIZING");
-      } else if (res.isDetected) {
-        setScannerState("DETECTING");
-      } else {
-        setScannerState("SEARCHING");
-      }
-    });
-
-    const unGuidance = manager.on("guidance", (res: any) => {
-      if (currentScannerStateRef.current !== "REVIEW") {
-        setGuidance(res.guidanceText);
-      }
-    });
-
-    const unCap = manager.on("capture", (res: EngineCaptureResult) => {
-      processCaptureResult(res);
-    });
-
-    const unFallback = manager.on("fallback", (info: any) => {
-      setActiveEngineType(info.engine);
-      setActiveEngineName(info.displayName);
-    });
-
-    return () => {
-      unDet();
-      unGuidance();
-      unCap();
-      unFallback();
-    };
-  }, [processCaptureResult]);
-
-  // Full restart for media sensor and CV tracker
-  const restartCameraStream = useCallback(async () => {
-    searchStartTimeRef.current = Date.now();
-    setShowSearchHint(false);
-    setDetectedQuad(null);
-    setIsDetected(false);
-    setSteadyCounter(0);
-    setStabilityScore(0);
-    setConfidenceScore(0);
-    await startCamera();
-  }, [startCamera]);
-
-  useEffect(() => {
-    startCamera();
-
-    return () => {
-      if (animFrameId.current) {
-        cancelAnimationFrame(animFrameId.current);
-      }
-      engineManagerRef.current.destroy();
-      if (videoRef.current && videoRef.current.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
-        stream.getTracks().forEach((t) => t.stop());
-      }
-    };
-  }, [startCamera]);
-
-  // Reset tracker on mode or cardSide change
-  useEffect(() => {
-    searchStartTimeRef.current = Date.now();
-    setShowSearchHint(false);
-    setSteadyCounter(0);
-    setStabilityScore(0);
-    setConfidenceScore(0);
-    setIsDetected(false);
-    setDuplicateWarning(null);
-    if (scannerState !== "REVIEW") {
-      setScannerState("SEARCHING");
+    let targetRatio = 1 / 1.414; // Default A4 portrait (0.707)
+    if (frameRatio === "a4_portrait") {
+      targetRatio = 1 / 1.414;
+    } else if (frameRatio === "a4_landscape") {
+      targetRatio = 1.414 / 1;
+    } else if (frameRatio === "card") {
+      targetRatio = 85.6 / 53.98; // CCCD/GPLX ~1.586
+    } else if (frameRatio === "free") {
+      targetRatio = cw / ch;
     }
-  }, [mode, cardSide]);
 
-  // Toggle Torch/Flash
-  const toggleTorch = async () => {
-    if (!videoRef.current?.srcObject) return;
-    const stream = videoRef.current.srcObject as MediaStream;
-    const track = stream.getVideoTracks()[0];
+    let boxW = 0;
+    let boxH = 0;
+
+    if (targetRatio > 1) {
+      // Landscape box (Cards, Landscape A4)
+      boxW = Math.min(cw * 0.90, 680);
+      boxH = boxW / targetRatio;
+      if (boxH > ch * 0.80) {
+        boxH = ch * 0.80;
+        boxW = boxH * targetRatio;
+      }
+    } else {
+      // Portrait box (A4 Portrait)
+      boxH = Math.min(ch * 0.78, 850);
+      boxW = boxH * targetRatio;
+      if (boxW > cw * 0.90) {
+        boxW = cw * 0.90;
+        boxH = boxW / targetRatio;
+      }
+    }
+
+    const startX = (cw - boxW) / 2;
+    const startY = (ch - boxH) / 2;
+
+    setGuideRect({
+      x: Math.round(startX),
+      y: Math.round(startY),
+      width: Math.round(boxW),
+      height: Math.round(boxH),
+    });
+  }, [frameRatio]);
+
+  // Window resize & orientation change listener
+  useEffect(() => {
+    updateGuideDimensions();
+    window.addEventListener("resize", updateGuideDimensions);
+    window.addEventListener("orientationchange", updateGuideDimensions);
+    return () => {
+      window.removeEventListener("resize", updateGuideDimensions);
+      window.removeEventListener("orientationchange", updateGuideDimensions);
+    };
+  }, [updateGuideDimensions]);
+
+  // Initialize Camera Stream with rock-solid fallback
+  const startCamera = useCallback(async (facing: "environment" | "user") => {
+    setIsStartingCamera(true);
+    setCameraError(null);
+    setIsCameraReady(false);
+
+    // Release old stream
+    if (streamRef.current) {
+      CameraHelper.stopStream(streamRef.current);
+      streamRef.current = null;
+    }
+
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+
     try {
-      const nextState = !torchOn;
-      await (track as any).applyConstraints({
-        advanced: [{ torch: nextState }],
-      });
-      setTorchOn(nextState);
-    } catch (err) {
-      console.warn("Could not toggle torch:", err);
-    }
-  };
+      let stream: MediaStream | null = null;
+      let torchAvailable = false;
 
-  // Switch Active Engine manually
-  const handleSwitchEngine = async (type: ScannerEngineType | "auto") => {
-    setShowEngineMenu(false);
-    const ok = await engineManagerRef.current.switchEngine(type);
-    if (ok) {
-      setActiveEngineType(engineManagerRef.current.getActiveEngineType() || "autocapture");
-      setActiveEngineName(engineManagerRef.current.getActiveEngineName());
-      await engineManagerRef.current.start();
-    }
-  };
-
-  // Capture frame manually with maximum sharpness peak selection
-  const handleManualCapture = async () => {
-    if (isCapturingRef.current || scannerState === "REVIEW") return;
-    isCapturingRef.current = true;
-    setScannerState("CAPTURING");
-    setGuidance("Đang tối ưu & chụp khung hình nét nhất...");
-
-    const video = videoRef.current;
-    if (video && video.readyState >= 2) {
-      const vw = video.videoWidth || 1280;
-      const vh = video.videoHeight || 720;
-      const targetAspect = mode === "cccd" || mode === "driver_license" ? "card" : "document";
-
-      // 1. Rapid burst check (3 frames across ~90ms) to lock peak sharpness
-      let bestCanvas: HTMLCanvasElement | null = null;
-      let maxSharpness = -1;
-      const burstCount = 3;
-
-      for (let i = 0; i < burstCount; i++) {
-        const tempCanvas = document.createElement("canvas");
-        tempCanvas.width = vw;
-        tempCanvas.height = vh;
-        const tempCtx = tempCanvas.getContext("2d");
-        if (tempCtx) {
-          tempCtx.drawImage(video, 0, 0, vw, vh);
-          const sharpness = CVEngine.calculateImageSharpness(tempCanvas);
-          if (sharpness > maxSharpness) {
-            maxSharpness = sharpness;
-            bestCanvas = tempCanvas;
-          }
-        }
-        if (i < burstCount - 1) {
-          await new Promise((r) => setTimeout(r, 25));
+      // Tier 1: Try exact environment (for real mobile back camera)
+      if (facing === "environment") {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: { exact: "environment" },
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+            },
+            audio: false,
+          });
+        } catch (eExact) {
+          console.warn("Exact environment failed, falling back to ideal:", eExact);
         }
       }
 
-      if (bestCanvas) {
-        const rawDataUrl = bestCanvas.toDataURL("image/jpeg", 0.95);
-        const quad =
-          detectedQuad ||
-          CVEngine.getDefaultQuad(vw, vh, targetAspect);
+      // Tier 2: Ideal facing mode
+      if (!stream) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: { ideal: facing },
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+            },
+            audio: false,
+          });
+        } catch (eIdeal) {
+          console.warn("Ideal facing failed, trying plain camera:", eIdeal);
+        }
+      }
 
-        const warpedCanvas = CVEngine.warpPerspective(bestCanvas, quad);
-        const warpedDataUrl = warpedCanvas.toDataURL("image/jpeg", 0.92);
+      // Tier 3: Any available camera
+      if (!stream) {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: false,
+        });
+      }
 
-        triggerCaptureFeedback();
-        setIsFlashing(true);
-        setTimeout(() => setIsFlashing(false), 240);
+      streamRef.current = stream;
 
-        const captureResult: EngineCaptureResult = {
-          dataUrl: rawDataUrl,
-          warpedDataUrl,
-          width: warpedCanvas.width,
-          height: warpedCanvas.height,
-          quad,
-          engineUsed: activeEngineType,
+      // Check torch capability
+      try {
+        const videoTrack = stream.getVideoTracks()[0];
+        if (videoTrack) {
+          const caps: any = (videoTrack as any).getCapabilities ? (videoTrack as any).getCapabilities() : {};
+          torchAvailable = !!caps?.torch;
+        }
+      } catch {
+        torchAvailable = false;
+      }
+      setHasTorch(torchAvailable);
+
+      if (videoRef.current) {
+        const video = videoRef.current;
+        video.srcObject = stream;
+
+        // Ensure video plays smoothly
+        await new Promise<void>((resolve) => {
+          if (video.readyState >= 2) {
+            resolve();
+          } else {
+            video.onloadedmetadata = () => resolve();
+          }
+        });
+
+        try {
+          await video.play();
+        } catch (playErr) {
+          console.warn("Video play interrupted, retrying:", playErr);
+        }
+
+        setIsCameraReady(true);
+        setIsStartingCamera(false);
+        setTimeout(updateGuideDimensions, 100);
+      }
+    } catch (err: any) {
+      console.error("Camera acquisition failed:", err);
+      const friendlyErr = CameraHelper.formatError(err);
+      setCameraError(friendlyErr.message);
+      setIsStartingCamera(false);
+      setIsCameraReady(false);
+    }
+  }, [updateGuideDimensions]);
+
+  // Boot camera on mount
+  useEffect(() => {
+    startCamera(facingMode);
+    return () => {
+      if (streamRef.current) {
+        CameraHelper.stopStream(streamRef.current);
+        streamRef.current = null;
+      }
+    };
+  }, [facingMode, startCamera]);
+
+  // Toggle Torch / Flashlight
+  const toggleTorch = async () => {
+    if (!streamRef.current || !hasTorch) return;
+    try {
+      const track = streamRef.current.getVideoTracks()[0];
+      if (track) {
+        const newTorch = !torchOn;
+        await (track as any).applyConstraints({
+          advanced: [{ torch: newTorch }],
+        });
+        setTorchOn(newTorch);
+      }
+    } catch (e) {
+      console.warn("Could not toggle torch:", e);
+    }
+  };
+
+  // Switch between front and back camera
+  const switchCamera = () => {
+    setTorchOn(false);
+    const nextFacing = facingMode === "environment" ? "user" : "environment";
+    setFacingMode(nextFacing);
+  };
+
+  // Perform High Resolution Guided Frame Crop from Video Feed
+  const captureGuidedFrame = useCallback(() => {
+    const video = videoRef.current;
+    const container = containerRef.current;
+    if (!video || !container || video.readyState < 2) return null;
+
+    const vw = video.videoWidth || 1920;
+    const vh = video.videoHeight || 1080;
+    const cw = container.clientWidth;
+    const ch = container.clientHeight;
+
+    if (cw === 0 || ch === 0 || guideRect.width === 0 || guideRect.height === 0) return null;
+
+    // 1. Draw raw video snapshot to high-resolution canvas
+    const rawCanvas = document.createElement("canvas");
+    rawCanvas.width = vw;
+    rawCanvas.height = vh;
+    const rawCtx = rawCanvas.getContext("2d", { willReadFrequently: true });
+    if (!rawCtx) return null;
+
+    rawCtx.drawImage(video, 0, 0, vw, vh);
+    const rawDataUrl = rawCanvas.toDataURL("image/jpeg", 0.95);
+
+    // 2. Compute video coordinates under 'object-fit: cover'
+    const videoAspect = vw / vh;
+    const containerAspect = cw / ch;
+
+    let renderedW = cw;
+    let renderedH = ch;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    if (containerAspect > videoAspect) {
+      // Container is wider -> top/bottom of video is cropped
+      renderedW = cw;
+      renderedH = cw / videoAspect;
+      offsetY = (ch - renderedH) / 2;
+    } else {
+      // Container is taller -> left/right of video is cropped
+      renderedH = ch;
+      renderedW = ch * videoAspect;
+      offsetX = (cw - renderedW) / 2;
+    }
+
+    const scale = vw / renderedW;
+    const relX = guideRect.x - offsetX;
+    const relY = guideRect.y - offsetY;
+
+    const srcX = Math.max(0, Math.min(vw - 20, relX * scale));
+    const srcY = Math.max(0, Math.min(vh - 20, relY * scale));
+    const srcW = Math.max(20, Math.min(vw - srcX, guideRect.width * scale));
+    const srcH = Math.max(20, Math.min(vh - srcY, guideRect.height * scale));
+
+    // 3. Crop guided area
+    const cropCanvas = document.createElement("canvas");
+    cropCanvas.width = Math.round(srcW);
+    cropCanvas.height = Math.round(srcH);
+    const cropCtx = cropCanvas.getContext("2d", { willReadFrequently: true });
+    if (!cropCtx) return null;
+
+    cropCtx.drawImage(
+      rawCanvas,
+      srcX, srcY, srcW, srcH,
+      0, 0, cropCanvas.width, cropCanvas.height
+    );
+
+    // 4. Apply initial document enhancement filter
+    const enhancedCanvas = CVEngine.applyFilter(cropCanvas, "document", 0);
+    const processedDataUrl = enhancedCanvas.toDataURL("image/jpeg", 0.92);
+
+    const quad: QuadPoints = {
+      topLeft: { x: srcX, y: srcY },
+      topRight: { x: srcX + srcW, y: srcY },
+      bottomRight: { x: srcX + srcW, y: srcY + srcH },
+      bottomLeft: { x: srcX, y: srcY + srcH },
+    };
+
+    const newPage: ScannedPage = {
+      id: `scan_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      originalImage: rawDataUrl,
+      processedImage: processedDataUrl,
+      quad,
+      filter: "document",
+      rotation: 0,
+      width: cropCanvas.width,
+      height: cropCanvas.height,
+      createdAt: Date.now(),
+    };
+
+    return newPage;
+  }, [guideRect]);
+
+  // Handle Capture Action
+  const handleCapture = () => {
+    if (!isCameraReady || isStartingCamera) return;
+
+    // Trigger visual flash & audio feedback
+    setIsFlashing(true);
+    playShutterSound();
+    setTimeout(() => setIsFlashing(false), 200);
+
+    const page = captureGuidedFrame();
+    if (!page) return;
+
+    if (captureMode === "single") {
+      // Chế độ A: Chụp từng trang -> Hiển thị màn hình Preview xem lại ngay
+      setReviewPage(page);
+      setActiveFilter("document");
+      setRotationDeg(0);
+    } else {
+      // Chế độ B: Chụp liên tục (Microsoft Lens style) -> Gom vào Stack góc trái
+      setBatchPages((prev) => [...prev, page]);
+      setAnimatingThumb(page.processedImage);
+      setTimeout(() => setAnimatingThumb(null), 600);
+    }
+  };
+
+  // Import photo from device library
+  const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result as string;
+      if (!dataUrl) return;
+
+      const img = new Image();
+      img.onload = () => {
+        const targetAspect = frameRatio === "card" ? "card" : "document";
+        const defaultQuad = CVEngine.getDefaultQuad(img.naturalWidth, img.naturalHeight, targetAspect);
+        const warpedCanvas = CVEngine.warpPerspective(img, defaultQuad);
+        const enhancedCanvas = CVEngine.applyFilter(warpedCanvas, "document", 0);
+
+        const page: ScannedPage = {
+          id: `import_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          originalImage: dataUrl,
+          processedImage: enhancedCanvas.toDataURL("image/jpeg", 0.92),
+          quad: defaultQuad,
+          filter: "document",
+          rotation: 0,
+          width: enhancedCanvas.width,
+          height: enhancedCanvas.height,
+          createdAt: Date.now(),
         };
 
-        processCaptureResult(captureResult);
-        return;
-      }
-    }
-
-    // Fallback if direct video capture wasn't available
-    const capRes = await engineManagerRef.current.captureManual();
-    if (capRes) {
-      processCaptureResult(capRes);
-    } else {
-      isCapturingRef.current = false;
-      setScannerState("SEARCHING");
-    }
-  };
-
-  // Next Page / Confirm Action
-  const handleProceedNextPage = (finishImmediately: boolean = false) => {
-    if (!reviewingPage) return;
-
-    const pageToSave = reviewingPage;
-    setReviewingPage(null);
-    setIsAdjustingCrop(false);
-
-    // 2-Sided card handling (CCCD / GPLX)
-    if (mode === "cccd" || mode === "driver_license") {
-      if (cardSide === "front" && !finishImmediately) {
-        setFrontPageDraft(pageToSave);
-        onCapturePage(pageToSave, false);
-        setCardSide("back");
-        setGuidance("Lật sang MẶT SAU của thẻ");
-        setScannerState("SEARCHING");
-        searchStartTimeRef.current = Date.now();
-        setShowSearchHint(false);
-        setSteadyCounter(0);
-        return;
-      } else {
-        onCapturePage(pageToSave, true);
-        return;
-      }
-    }
-
-    // Normal multi-page document scanning
-    onCapturePage(pageToSave, finishImmediately);
-    if (!finishImmediately) {
-      setScannerState("SEARCHING");
-      searchStartTimeRef.current = Date.now();
-      setShowSearchHint(false);
-      setSteadyCounter(0);
-      setGuidance("Đưa trang tiếp theo vào khung hình");
-    }
-  };
-
-  // Discard current page and retake immediately
-  const handleRetakeCurrentPage = () => {
-    setReviewingPage(null);
-    setIsAdjustingCrop(false);
-    isCapturingRef.current = false;
-    setScannerState("SEARCHING");
-    setDetectedQuad(null);
-    setLatestQuality(null);
-    setLatestCardSide(null);
-    setSteadyCounter(0);
-    setStabilityScore(0);
-    setConfidenceScore(0);
-    setIsDetected(false);
-    searchStartTimeRef.current = Date.now();
-    setShowSearchHint(false);
-    setGuidance("Căn chỉnh lại tài liệu để chụp lại");
-  };
-
-  // Update crop from in-place CropAdjuster
-  const handleCropAdjustComplete = (warpedCanvas: HTMLCanvasElement, adjustedQuad: QuadPoints) => {
-    if (!reviewingPage) return;
-    const defaultFilter: FilterMode = reviewingPage.filter || "document";
-    const processedCanvas = CVEngine.applyFilter(warpedCanvas, defaultFilter, reviewingPage.rotation || 0);
-    const processedDataUrl = processedCanvas.toDataURL("image/jpeg", 0.92);
-    const pHash = CVEngine.computePerceptualHashFromCanvas(warpedCanvas);
-
-    setReviewingPage({
-      ...reviewingPage,
-      processedImage: processedDataUrl,
-      quad: adjustedQuad,
-      width: processedCanvas.width,
-      height: processedCanvas.height,
-      perceptualHash: pHash,
-    });
-    setIsAdjustingCrop(false);
-  };
-
-  // Real-time Canvas Rendering for Adobe Scan polygon overlay
-  useEffect(() => {
-    const renderLoop = () => {
-      const video = videoRef.current;
-      const overlay = overlayCanvasRef.current;
-      const currentState = currentScannerStateRef.current;
-
-      if (video && video.readyState >= 2 && overlay) {
-        const vw = video.clientWidth;
-        const vh = video.clientHeight;
-
-        if (overlay.width !== vw || overlay.height !== vh) {
-          overlay.width = vw;
-          overlay.height = vh;
+        if (captureMode === "single") {
+          setReviewPage(page);
+          setActiveFilter("document");
+          setRotationDeg(0);
+        } else {
+          setBatchPages((prev) => [...prev, page]);
+          setAnimatingThumb(page.processedImage);
+          setTimeout(() => setAnimatingThumb(null), 600);
         }
-
-        const ctx = overlay.getContext("2d");
-
-        if (ctx) {
-          ctx.clearRect(0, 0, vw, vh);
-
-          if (currentState !== "REVIEW" && !isCapturingRef.current) {
-            const vidW = video.videoWidth || 1280;
-            const vidH = video.videoHeight || 720;
-            const targetAspect = mode === "cccd" || mode === "driver_license" ? "card" : "document";
-
-            const renderScale = Math.max(vw / vidW, vh / vidH);
-            const renderW = vidW * renderScale;
-            const renderH = vidH * renderScale;
-            const offsetX = (vw - renderW) / 2;
-            const offsetY = (vh - renderH) / 2;
-
-            const mapToScreen = (pt: Point): Point => ({
-              x: offsetX + pt.x * renderScale,
-              y: offsetY + pt.y * renderScale,
-            });
-
-            let curScreen: QuadPoints;
-            if (detectedQuad) {
-              curScreen = {
-                topLeft: mapToScreen(detectedQuad.topLeft),
-                topRight: mapToScreen(detectedQuad.topRight),
-                bottomRight: mapToScreen(detectedQuad.bottomRight),
-                bottomLeft: mapToScreen(detectedQuad.bottomLeft),
-              };
-            } else {
-              const defQ = CVEngine.getDefaultQuad(vidW, vidH, targetAspect);
-              curScreen = {
-                topLeft: mapToScreen(defQ.topLeft),
-                topRight: mapToScreen(defQ.topRight),
-                bottomRight: mapToScreen(defQ.bottomRight),
-                bottomLeft: mapToScreen(defQ.bottomLeft),
-              };
-            }
-
-            const p0 = curScreen.topLeft;
-            const p1 = curScreen.topRight;
-            const p2 = curScreen.bottomRight;
-            const p3 = curScreen.bottomLeft;
-            const now = performance.now();
-
-            // Render stabilized polygon overlay (Adobe Scan Style)
-            ctx.save();
-            ctx.beginPath();
-            ctx.moveTo(p0.x, p0.y);
-            ctx.lineTo(p1.x, p1.y);
-            ctx.lineTo(p2.x, p2.y);
-            ctx.lineTo(p3.x, p3.y);
-            ctx.closePath();
-
-            const isReady = currentState === "READY";
-            const isStabilizing = currentState === "STABILIZING";
-
-            if (isReady) {
-              ctx.strokeStyle = "#10b981"; // Emerald green
-              ctx.lineWidth = 3.5;
-              ctx.fillStyle = "rgba(16, 185, 129, 0.22)";
-              ctx.shadowColor = "#10b981";
-              ctx.shadowBlur = 18;
-            } else if (isStabilizing) {
-              ctx.strokeStyle = "#00d2ff"; // Adobe Scan Electric Cyan
-              ctx.lineWidth = 3.0;
-              ctx.fillStyle = "rgba(0, 210, 255, 0.14)";
-              ctx.shadowColor = "#00d2ff";
-              ctx.shadowBlur = 14;
-            } else if (isDetected) {
-              ctx.strokeStyle = "#3b82f6"; // Primary Blue
-              ctx.lineWidth = 2.4;
-              ctx.fillStyle = "rgba(59, 130, 246, 0.08)";
-              ctx.shadowColor = "#3b82f6";
-              ctx.shadowBlur = 8;
-            } else {
-              ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
-              ctx.lineWidth = 1.6;
-              ctx.fillStyle = "rgba(255, 255, 255, 0.03)";
-              ctx.setLineDash([8, 8]);
-            }
-
-            ctx.fill();
-            ctx.stroke();
-            ctx.restore();
-
-            // Draw Adobe Scan-style 4 Glowing Corner Pins with Expanding Pulse Radar
-            const drawAdobeCorner = (pt: Point, angleDeg: number) => {
-              ctx.save();
-              ctx.translate(pt.x, pt.y);
-
-              const pulsePhase1 = (now * 0.003) % 1;
-              const pulsePhase2 = (now * 0.003 + 0.5) % 1;
-
-              const radarColor = isReady
-                ? "rgba(16, 185, 129, "
-                : isStabilizing
-                ? "rgba(0, 210, 255, "
-                : isDetected
-                ? "rgba(59, 130, 246, "
-                : "rgba(255, 255, 255, ";
-
-              // Primary Radar Wave
-              ctx.beginPath();
-              ctx.arc(0, 0, 8 + pulsePhase1 * 18, 0, Math.PI * 2);
-              ctx.strokeStyle = radarColor + `${(1 - pulsePhase1) * 0.6})`;
-              ctx.lineWidth = 1.8;
-              ctx.stroke();
-
-              // Secondary Radar Wave
-              ctx.beginPath();
-              ctx.arc(0, 0, 8 + pulsePhase2 * 18, 0, Math.PI * 2);
-              ctx.strokeStyle = radarColor + `${(1 - pulsePhase2) * 0.4})`;
-              ctx.lineWidth = 1.4;
-              ctx.stroke();
-
-              // Soft Glow Halo
-              ctx.beginPath();
-              ctx.arc(0, 0, 10, 0, Math.PI * 2);
-              ctx.fillStyle = radarColor + "0.3)";
-              ctx.fill();
-
-              // Inner solid pin circle
-              ctx.beginPath();
-              ctx.arc(0, 0, isReady ? 6.5 : 5.5, 0, Math.PI * 2);
-              ctx.fillStyle = isReady ? "#10b981" : isStabilizing ? "#00d2ff" : isDetected ? "#3b82f6" : "#ffffff";
-              ctx.fill();
-              ctx.lineWidth = 2;
-              ctx.strokeStyle = "#ffffff";
-              ctx.stroke();
-
-              // Precision Corner Angle Bracket
-              ctx.rotate((angleDeg * Math.PI) / 180);
-              ctx.beginPath();
-              ctx.moveTo(0, 26);
-              ctx.lineTo(0, 0);
-              ctx.lineTo(26, 0);
-              ctx.strokeStyle = isReady ? "#10b981" : isStabilizing ? "#00d2ff" : isDetected ? "#60a5fa" : "#ffffff";
-              ctx.lineWidth = 3.8;
-              ctx.lineCap = "round";
-              ctx.lineJoin = "round";
-              ctx.stroke();
-
-              ctx.restore();
-            };
-
-            drawAdobeCorner(p0, 0);
-            drawAdobeCorner(p1, 90);
-            drawAdobeCorner(p2, 180);
-            drawAdobeCorner(p3, 270);
-            setScreenQuad(curScreen);
-          }
-        }
-      }
-
-      animFrameId.current = requestAnimationFrame(renderLoop);
+      };
+      img.src = dataUrl;
     };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  };
 
-    animFrameId.current = requestAnimationFrame(renderLoop);
-    return () => {
-      if (animFrameId.current) cancelAnimationFrame(animFrameId.current);
-    };
-  }, [detectedQuad, isDetected, mode]);
+  // Re-apply filter and rotation on review page
+  const updateReviewFilterAndRotation = (newFilter: FilterMode, newRotation: number) => {
+    if (!reviewPage) return;
+    setActiveFilter(newFilter);
+    setRotationDeg(newRotation);
 
-  // Process an image data URL (from gallery, clipboard, or sample)
-  const processImageSource = useCallback((dataUrl: string) => {
     const img = new Image();
     img.onload = () => {
-      const isCard = mode === "cccd" || mode === "driver_license";
-      let selectedQuad: QuadPoints;
-
-      if (isCard) {
-        const marginX = img.naturalWidth * 0.15;
-        const marginY = img.naturalHeight * 0.15;
-        selectedQuad = {
-          topLeft: { x: marginX, y: marginY },
-          topRight: { x: img.naturalWidth - marginX, y: marginY },
-          bottomRight: { x: img.naturalWidth - marginX, y: img.naturalHeight - marginY },
-          bottomLeft: { x: marginX, y: img.naturalHeight - marginY },
-        };
-      } else {
-        selectedQuad = {
-          topLeft: { x: 0, y: 0 },
-          topRight: { x: img.naturalWidth, y: 0 },
-          bottomRight: { x: img.naturalWidth, y: img.naturalHeight },
-          bottomLeft: { x: 0, y: img.naturalHeight },
-        };
-      }
-
-      const warped = CVEngine.warpPerspective(img, selectedQuad);
-      const processedCanvas = CVEngine.applyFilter(warped, "document", 0);
-      const processedUrl = processedCanvas.toDataURL("image/jpeg", 0.92);
-      const pHash = CVEngine.computePerceptualHashFromCanvas(warped);
-
-      const newPage: ScannedPage = {
-        id: `page_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-        originalImage: dataUrl,
-        processedImage: processedUrl,
-        quad: selectedQuad,
-        filter: "document",
-        rotation: 0,
-        createdAt: Date.now(),
-        width: processedCanvas.width,
-        height: processedCanvas.height,
-        perceptualHash: pHash,
-        detectedSide: cardSide,
-      };
-
-      setReviewingPage(newPage);
-      setScannerState("REVIEW");
+      const warpedCanvas = CVEngine.warpPerspective(img, reviewPage.quad);
+      const filteredCanvas = CVEngine.applyFilter(warpedCanvas, newFilter, newRotation);
+      setReviewPage({
+        ...reviewPage,
+        filter: newFilter,
+        rotation: newRotation,
+        processedImage: filteredCanvas.toDataURL("image/jpeg", 0.92),
+      });
     };
-    img.src = dataUrl;
-  }, [mode, cardSide]);
+    img.src = reviewPage.originalImage;
+  };
 
-  // Global paste handler for quick scanning
-  useEffect(() => {
-    const handlePaste = (e: ClipboardEvent) => {
-      const items = e.clipboardData?.items;
-      if (!items) return;
-      for (let i = 0; i < items.length; i++) {
-        if (items[i].type.startsWith("image/")) {
-          const file = items[i].getAsFile();
-          if (file) {
-            const reader = new FileReader();
-            reader.onload = (event) => {
-              const dataUrl = event.target?.result as string;
-              if (dataUrl) processImageSource(dataUrl);
-            };
-            reader.readAsDataURL(file);
-          }
-          break;
-        }
-      }
-    };
-
-    window.addEventListener("paste", handlePaste);
-    return () => window.removeEventListener("paste", handlePaste);
-  }, [processImageSource]);
-
-  // Handle image import from device
-  const handleFileImport = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-
-    const fileList = Array.from(files);
-    fileList.forEach((file: File) => {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const dataUrl = event.target?.result as string;
-        if (dataUrl) processImageSource(dataUrl);
-      };
-      reader.readAsDataURL(file);
+  // Apply Crop adjustments from CropAdjuster
+  const handleCropComplete = (warpedCanvas: HTMLCanvasElement, adjustedQuad: QuadPoints) => {
+    if (!reviewPage) return;
+    const filteredCanvas = CVEngine.applyFilter(warpedCanvas, activeFilter, rotationDeg);
+    setReviewPage({
+      ...reviewPage,
+      quad: adjustedQuad,
+      width: filteredCanvas.width,
+      height: filteredCanvas.height,
+      processedImage: filteredCanvas.toDataURL("image/jpeg", 0.92),
     });
-
-    if (fileInputRef.current) fileInputRef.current.value = "";
+    setIsAdjustingCrop(false);
   };
 
-  // Quick action to paste from clipboard via button
-  const handlePasteFromClipboard = async () => {
-    try {
-      if (navigator.clipboard && navigator.clipboard.read) {
-        const items = await navigator.clipboard.read();
-        for (const item of items) {
-          const imgType = item.types.find((t) => t.startsWith("image/"));
-          if (imgType) {
-            const blob = await item.getType(imgType);
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-              const dataUrl = ev.target?.result as string;
-              if (dataUrl) processImageSource(dataUrl);
-            };
-            reader.readAsDataURL(blob);
-            return;
-          }
-        }
-      }
-      alert("Không tìm thấy ảnh trong bộ nhớ tạm. Hãy chụp màn hình hoặc sao chép ảnh rồi bấm Dán.");
-    } catch {
-      alert("Hãy dùng phím tắt Ctrl+V (hoặc Cmd+V) để dán ảnh trực tiếp.");
+  // Confirm Single-page usage
+  const handleUseSinglePage = () => {
+    if (!reviewPage) return;
+    onCapturePage(reviewPage, true);
+    onFinishedScanning();
+  };
+
+  // Retake single-page
+  const handleRetakeSinglePage = () => {
+    setReviewPage(null);
+  };
+
+  // Confirm & Save All Batch Pages
+  const handleSaveAllBatchPages = () => {
+    if (batchPages.length === 0) return;
+    batchPages.forEach((pg, idx) => {
+      const isLast = idx === batchPages.length - 1;
+      onCapturePage(pg, isLast);
+    });
+    onFinishedScanning();
+  };
+
+  // Remove page in batch
+  const handleRemoveBatchPage = (index: number) => {
+    setBatchPages((prev) => prev.filter((_, idx) => idx !== index));
+    if (selectedBatchIndex === index) {
+      setSelectedBatchIndex(null);
     }
   };
 
-  // Load sample document for testing
-  const handleLoadSampleDocument = () => {
-    const sampleUrl = CameraHelper.createSampleDocumentDataUrl();
-    if (sampleUrl) {
-      processImageSource(sampleUrl);
-    }
-  };
+  // Rotate page in batch
+  const handleRotateBatchPage = (index: number) => {
+    const page = batchPages[index];
+    if (!page) return;
+    const nextRot = ((page.rotation || 0) + 90) % 360;
 
-  const is2SidedCard = mode === "cccd" || mode === "driver_license";
+    const img = new Image();
+    img.onload = () => {
+      const warpedCanvas = CVEngine.warpPerspective(img, page.quad);
+      const filteredCanvas = CVEngine.applyFilter(warpedCanvas, page.filter || "document", nextRot);
+      const updatedPage: ScannedPage = {
+        ...page,
+        rotation: nextRot,
+        processedImage: filteredCanvas.toDataURL("image/jpeg", 0.92),
+      };
+      setBatchPages((prev) => prev.map((p, i) => (i === index ? updatedPage : p)));
+    };
+    img.src = page.originalImage;
+  };
 
   return (
-    <div className="fixed inset-0 z-40 flex flex-col bg-black text-white select-none h-screen min-h-screen w-full overflow-hidden">
-      {/* Visual Shutter Flash Effect */}
-      {isFlashing && (
-        <div className="absolute inset-0 z-50 bg-white opacity-95 pointer-events-none transition-opacity duration-500" />
-      )}
-
-      {/* Adobe Scan Flying / Jump Thumbnail Animation */}
-      <AnimatePresence>
-        {jumpAnimationImage && (
-          <motion.div
-            initial={{ scale: 0.9, opacity: 0.9, x: "-50%", y: "-50%", left: "50%", top: "50%" }}
-            animate={{
-              scale: [0.9, 1.05, 0.25],
-              opacity: [0.9, 1, 0],
-              left: ["50%", "50%", "20%"],
-              top: ["50%", "50%", "88%"],
-            }}
-            transition={{ duration: 0.65, ease: [0.16, 1, 0.3, 1] }}
-            className="fixed z-50 w-72 h-96 rounded-2xl overflow-hidden border-2 border-emerald-400 shadow-2xl shadow-emerald-500/50 pointer-events-none"
-          >
-            <img src={jumpAnimationImage} alt="Captured preview" className="w-full h-full object-cover" />
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Duplicate Page / Side Warning Toast */}
-      {duplicateWarning && (
-        <div className="absolute top-16 inset-x-4 z-50 max-w-md mx-auto p-3 rounded-2xl bg-amber-600/95 text-white font-semibold text-xs shadow-2xl border border-amber-400 flex items-center gap-2.5 animate-bounce">
-          <AlertCircle className="w-5 h-5 shrink-0 text-amber-200" />
-          <span>{duplicateWarning}</span>
-        </div>
-      )}
-
-      {/* Top Header Bar */}
-      <div className="relative z-50 flex items-center justify-between px-4 pt-safe-top pb-3 bg-gradient-to-b from-black/95 via-black/70 to-transparent">
-        {/* Back / Close Button */}
-        <button
-          id="btn-camera-close"
-          onClick={onClose}
-          className="min-w-[44px] min-h-[44px] flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-slate-900/90 backdrop-blur-md text-white hover:bg-slate-800 transition active:scale-95 border border-slate-700/60 shadow-lg"
-          title="Quay lại màn hình chính"
-          aria-label="Quay lại"
-        >
-          <ArrowLeft className="w-5 h-5 text-white" />
-          <span className="text-xs font-semibold hidden xs:inline">Quay lại</span>
-        </button>
-
-        {/* Engine Badge / Selector Pill */}
-        <div className="relative">
-          <button
-            id="btn-scanner-engine-badge"
-            onClick={() => setShowEngineMenu((prev) => !prev)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-900/90 backdrop-blur border border-slate-700/60 shadow-md text-xs font-medium text-slate-200 hover:bg-slate-800 transition active:scale-95"
-            title="Đổi Engine nhận diện"
-          >
-            <Cpu className="w-3.5 h-3.5 text-cyan-400" />
-            <span className="text-[11px] font-semibold text-cyan-200">
-              {activeEngineType === "autocapture"
-                ? "⚡ ML AutoCapture"
-                : activeEngineType === "scanic"
-                ? "🚀 Scanic WASM"
-                : "🍃 Classic CV"}
-            </span>
-          </button>
-
-          {/* Engine Dropdown Menu */}
-          {showEngineMenu && (
-            <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 w-64 p-2 rounded-2xl bg-slate-900/95 backdrop-blur-xl border border-slate-700 shadow-2xl z-50 flex flex-col gap-1">
-              <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                Chọn Engine Quét
-              </div>
-              <button
-                onClick={() => handleSwitchEngine("autocapture")}
-                className={`flex items-center justify-between p-2 rounded-xl text-xs font-medium transition ${
-                  activeEngineType === "autocapture"
-                    ? "bg-cyan-600/20 text-cyan-300 border border-cyan-500/40"
-                    : "text-slate-200 hover:bg-slate-800"
-                }`}
-              >
-                <div className="flex flex-col text-left">
-                  <span className="font-semibold">⚡ ML AutoCapture (Gốc)</span>
-                  <span className="text-[10px] text-slate-400">Adobe-grade ML + COCO-SSD</span>
-                </div>
-                {activeEngineType === "autocapture" && <Check className="w-4 h-4 text-cyan-400" />}
-              </button>
-
-              <button
-                onClick={() => handleSwitchEngine("scanic")}
-                className={`flex items-center justify-between p-2 rounded-xl text-xs font-medium transition ${
-                  activeEngineType === "scanic"
-                    ? "bg-blue-600/20 text-blue-300 border border-blue-500/40"
-                    : "text-slate-200 hover:bg-slate-800"
-                }`}
-              >
-                <div className="flex flex-col text-left">
-                  <span className="font-semibold">🚀 Scanic (WASM Cực nhanh)</span>
-                  <span className="text-[10px] text-slate-400">WASM + ML Fallback</span>
-                </div>
-                {activeEngineType === "scanic" && <Check className="w-4 h-4 text-blue-400" />}
-              </button>
-
-              <button
-                onClick={() => handleSwitchEngine("jscanify")}
-                className={`flex items-center justify-between p-2 rounded-xl text-xs font-medium transition ${
-                  activeEngineType === "jscanify"
-                    ? "bg-emerald-600/20 text-emerald-300 border border-emerald-500/40"
-                    : "text-slate-200 hover:bg-slate-800"
-                }`}
-              >
-                <div className="flex flex-col text-left">
-                  <span className="font-semibold">🍃 Classic CV (Tiết kiệm pin)</span>
-                  <span className="text-[10px] text-slate-400">Thuần Canvas cho máy yếu</span>
-                </div>
-                {activeEngineType === "jscanify" && <Check className="w-4 h-4 text-emerald-400" />}
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Top Actions: Torch & Auto-Capture */}
-        <div className="flex items-center gap-2">
-          {hasTorch && (
-            <button
-              id="btn-camera-torch"
-              onClick={toggleTorch}
-              className={`min-w-[44px] min-h-[44px] flex items-center justify-center p-2.5 rounded-full backdrop-blur-md transition active:scale-95 border shadow-md ${
-                torchOn
-                  ? "bg-amber-500 text-slate-950 border-amber-400 font-bold"
-                  : "bg-slate-900/80 text-white border-slate-700/50 hover:bg-slate-800"
-              }`}
-              title="Bật/Tắt Đèn Flash"
-              aria-label="Bật/Tắt Đèn Flash"
-            >
-              {torchOn ? <Zap className="w-5 h-5 fill-current" /> : <ZapOff className="w-5 h-5" />}
-            </button>
-          )}
-
-          {/* Auto-Capture Toggle Pill */}
-          <button
-            id="btn-toggle-autocapture"
-            onClick={() => setAutoCapture((prev) => !prev)}
-            className={`min-w-[44px] min-h-[44px] flex items-center gap-1.5 px-3 py-2 rounded-full backdrop-blur-md transition active:scale-95 border text-xs font-semibold shadow-md ${
-              autoCapture
-                ? "bg-emerald-600/90 text-white border-emerald-500/80 shadow-emerald-950/40"
-                : "bg-slate-900/80 text-slate-300 border-slate-700/50 hover:bg-slate-800"
-            }`}
-            title="Bật/Tắt Tự động chụp khi giữ yên"
-          >
-            <Sparkles className={`w-3.5 h-3.5 ${autoCapture ? "text-emerald-200" : "text-slate-400"}`} />
-            <span>{autoCapture ? "Tự động" : "Thủ công"}</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Main Viewport & Video Stream */}
-      <div className="relative flex-1 w-full h-full bg-black overflow-hidden flex items-center justify-center">
-        {/* HTML5 Camera Video Element */}
-        <video
-          ref={videoRef}
-          playsInline
-          muted
-          autoPlay
-          className="absolute inset-0 w-full h-full object-cover"
-        />
-
-        {/* Real-time Augmented Polygon Canvas Overlay */}
-        <canvas
-          ref={overlayCanvasRef}
-          className="absolute inset-0 w-full h-full pointer-events-none z-10"
-        />
-
-        {/* Real-time Quality Meters */}
-        {scannerState !== "REVIEW" && (
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-slate-950/85 backdrop-blur border border-slate-700/60 shadow-lg text-[11px]">
-            <div className="flex items-center gap-1">
-              <Eye className="w-3 h-3 text-slate-400" />
-              <span className="text-slate-400">Nét:</span>
-              <span
-                className={`font-semibold ${
-                  (latestQuality?.sharpness || 85) >= 65 ? "text-emerald-400" : "text-amber-400"
-                }`}
-              >
-                {latestQuality?.sharpness || (isDetected ? 92 : 85)}%
-              </span>
-            </div>
-            <div className="w-[1px] h-3 bg-slate-700" />
-            <div className="flex items-center gap-1">
-              <Sun className="w-3 h-3 text-slate-400" />
-              <span className="text-slate-400">Sáng:</span>
-              <span
-                className={`font-semibold ${
-                  latestQuality?.isWellExposed !== false ? "text-emerald-400" : "text-amber-400"
-                }`}
-              >
-                {latestQuality?.brightness || 128}
-              </span>
-            </div>
-            <div className="w-[1px] h-3 bg-slate-700" />
-            <div className="flex items-center gap-1">
-              <ShieldCheck className="w-3 h-3 text-slate-400" />
-              <span className="text-slate-400">Khung:</span>
-              <span className="font-semibold text-blue-400">90%</span>
-            </div>
-          </div>
-        )}
-
-        {/* Real-time Guidance Pill */}
-        {scannerState !== "REVIEW" && (
-          <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 max-w-[90vw]">
-            <div
-              className={`flex items-center gap-2 px-4 py-2 rounded-full backdrop-blur-xl border shadow-xl text-xs font-semibold transition-all duration-200 ${
-                scannerState === "READY"
-                  ? "bg-emerald-950/90 text-emerald-300 border-emerald-500/80 shadow-emerald-950/50 scale-105"
-                  : scannerState === "STABILIZING" && autoCapture
-                  ? "bg-cyan-950/90 text-cyan-300 border-cyan-500/70 shadow-cyan-950/50"
-                  : isDetected
-                  ? "bg-blue-950/90 text-blue-300 border-blue-500/60 shadow-blue-950/50"
-                  : "bg-slate-950/85 text-slate-200 border-slate-700/60"
-              }`}
-            >
-              {scannerState === "READY" ? (
-                <Sparkles className="w-4 h-4 text-emerald-400 animate-spin" />
-              ) : scannerState === "STABILIZING" && autoCapture ? (
-                <div className="w-3.5 h-3.5 rounded-full border-2 border-cyan-400 border-t-transparent animate-spin" />
-              ) : isDetected ? (
-                <Scan className="w-4 h-4 text-blue-400" />
-              ) : (
-                <ScanLine className="w-4 h-4 text-slate-400 animate-pulse" />
-              )}
-              <span className="truncate">
-                {scannerState === "READY"
-                  ? "Đang tự xử lý chụp ảnh..."
-                  : scannerState === "STABILIZING" && autoCapture
-                  ? `Giữ yên tĩnh để tự chụp (${Math.min(100, Math.round((steadyCounter / 4) * 100))}%)`
-                  : !autoCapture
-                  ? isDetected
-                    ? "Đã căn chuẩn tài liệu • Bấm chụp khi đạt độ nét cao nhất"
-                    : guidance || "Căn tài liệu vào khung 90% & bấm chụp khi nét"
-                  : isDetected
-                  ? "Đã tìm thấy tài liệu • Giữ yên điện thoại"
-                  : guidance || "Đang tìm kiếm tài liệu..."}
-              </span>
-            </div>
-          </div>
-        )}
-
-        {/* 2-Sided Card Guide Watermark */}
-        {is2SidedCard && scannerState !== "REVIEW" && (
-          <div className="absolute top-28 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 px-4 py-1.5 rounded-full bg-indigo-950/85 backdrop-blur border border-indigo-700/60 text-xs font-semibold text-indigo-200 shadow-xl">
-            <IdCard className="w-4 h-4 text-indigo-400" />
-            <span>
-              {cardSide === "front" ? "ĐANG CHỤP: MẶT TRƯỚC THẺ" : "ĐANG CHỤP: MẶT SAU THẺ"}
-            </span>
-          </div>
-        )}
-
-        {/* Subtle Assistant Alert Banner if detection takes too long */}
-        {showSearchHint && scannerState !== "REVIEW" && !isDetected && (
-          <div className="absolute bottom-6 inset-x-4 max-w-sm mx-auto z-20 p-3 rounded-2xl bg-slate-900/95 border border-slate-700/80 text-white shadow-2xl backdrop-blur-md flex flex-col gap-2 animate-fade-in">
-            <div className="flex items-start gap-2.5">
-              <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-              <div className="text-[11px] leading-relaxed text-slate-200">
-                <span className="font-semibold text-amber-300">Chưa nhận diện được tài liệu?</span>
-                <p className="text-slate-300 mt-0.5">
-                  Đặt tài liệu trên mặt bàn tối có độ tương phản cao hoặc bấm nút chụp thủ công. Nếu camera bị đơ, hãy bấm làm mới máy ảnh.
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-800">
-              <button
-                type="button"
-                onClick={() => setShowSearchHint(false)}
-                className="px-2.5 py-1 text-[11px] font-medium text-slate-400 hover:text-slate-200"
-              >
-                Đã hiểu
-              </button>
-              <button
-                type="button"
-                onClick={restartCameraStream}
-                className="flex items-center gap-1 px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-bold active:scale-95 transition"
-              >
-                <RefreshCw className="w-3 h-3" />
-                <span>Làm mới máy ảnh</span>
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Camera Permission / Error Dialog */}
-        {cameraError && (
-          <div className="absolute inset-0 z-30 flex items-center justify-center p-6 bg-slate-950/90 backdrop-blur-md">
-            <div className="max-w-sm w-full p-6 rounded-2xl bg-slate-900 border border-slate-800 text-center shadow-2xl">
-              <div className="w-12 h-12 rounded-full bg-red-500/10 text-red-400 flex items-center justify-center mx-auto mb-4">
-                <AlertCircle className="w-6 h-6" />
-              </div>
-              <h3 className="text-lg font-bold text-white mb-2">Không thể mở máy ảnh</h3>
-              <p className="text-sm text-slate-300 mb-5 leading-relaxed">{cameraError}</p>
-              <div className="flex flex-col gap-2.5">
-                <button
-                  onClick={startCamera}
-                  className="w-full min-h-[44px] flex items-center justify-center gap-2 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 font-semibold text-white transition active:scale-98 shadow-lg shadow-blue-600/30 text-sm"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                  <span>Thử kết nối lại máy ảnh</span>
-                </button>
-
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="w-full min-h-[44px] flex items-center justify-center gap-2 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 font-semibold text-slate-200 transition active:scale-98 border border-slate-700 text-sm"
-                >
-                  <ImageIcon className="w-4 h-4 text-blue-400" />
-                  <span>Chọn ảnh từ thiết bị</span>
-                </button>
-
-                <button
-                  onClick={handlePasteFromClipboard}
-                  className="w-full min-h-[44px] flex items-center justify-center gap-2 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 font-semibold text-slate-200 transition active:scale-98 border border-slate-700 text-sm"
-                >
-                  <ClipboardPaste className="w-4 h-4 text-emerald-400" />
-                  <span>Dán ảnh từ Clipboard (Ctrl+V)</span>
-                </button>
-
-                <button
-                  onClick={handleLoadSampleDocument}
-                  className="w-full min-h-[44px] flex items-center justify-center gap-2 py-2.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 font-semibold text-emerald-300 transition active:scale-98 border border-emerald-500/40 text-sm"
-                >
-                  <Sparkles className="w-4 h-4 text-emerald-400" />
-                  <span>Thử quét tài liệu mẫu A4</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Hidden File Input for Device Image Import */}
+    <div
+      ref={containerRef}
+      className="fixed inset-0 z-50 bg-black text-white select-none overflow-hidden flex flex-col font-sans"
+    >
+      {/* Hidden File Input */}
       <input
         ref={fileInputRef}
         type="file"
         accept="image/*"
-        multiple
-        onChange={handleFileImport}
+        onChange={handleImportFile}
         className="hidden"
       />
 
-      {/* REVIEW & JUMPING SHEET MODAL */}
-      <AnimatePresence>
-        {scannerState === "REVIEW" && reviewingPage && (
-          <motion.div
-            initial={{ opacity: 0, y: 120 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 120 }}
-            transition={{ type: "spring", damping: 26, stiffness: 320 }}
-            className="absolute bottom-0 inset-x-0 z-50 p-4 pb-safe bg-slate-900/95 backdrop-blur-xl border-t border-slate-800 shadow-2xl rounded-t-3xl flex flex-col gap-4"
-          >
-            {/* Sheet Header */}
+      {/* Screen Shutter Flash Effect */}
+      <div
+        className={`absolute inset-0 z-50 pointer-events-none bg-white transition-opacity duration-150 ${
+          isFlashing ? "opacity-90" : "opacity-0"
+        }`}
+      />
+
+      {/* MAIN CAMERA STREAM VIEW (When not in review mode) */}
+      {!reviewPage && !showBatchGallery && (
+        <div className="relative w-full h-full flex-1 flex flex-col justify-between overflow-hidden">
+          {/* Background Live Video */}
+          <video
+            ref={videoRef}
+            autoPlay
+            muted
+            playsInline
+            // @ts-ignore
+            webkit-playsinline="true"
+            className="absolute inset-0 w-full h-full object-cover z-0"
+          />
+
+          {/* Fallback / Loading Overlay */}
+          {(isStartingCamera || !isCameraReady) && !cameraError && (
+            <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-950/80 backdrop-blur-sm">
+              <div className="w-12 h-12 rounded-full border-3 border-blue-500 border-t-transparent animate-spin mb-4" />
+              <p className="text-slate-200 text-sm font-medium">Đang khởi động Camera HD...</p>
+              <p className="text-slate-400 text-xs mt-1">Độ nét cao • Căn chỉnh tức thì</p>
+            </div>
+          )}
+
+          {/* Camera Error Message */}
+          {cameraError && (
+            <div className="absolute inset-0 z-30 flex flex-col items-center justify-center p-6 bg-slate-950 text-center">
+              <div className="w-16 h-16 rounded-full bg-red-500/20 border border-red-500/40 flex items-center justify-center mb-4">
+                <CameraOff className="w-8 h-8 text-red-400" />
+              </div>
+              <h3 className="text-lg font-bold text-white mb-2">Không thể mở Camera</h3>
+              <p className="text-sm text-slate-300 max-w-sm mb-6 leading-relaxed">
+                {cameraError}
+              </p>
+              <div className="flex flex-col sm:flex-row gap-3 w-full max-w-xs">
+                <button
+                  onClick={() => startCamera(facingMode)}
+                  className="flex-1 py-3 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-medium flex items-center justify-center gap-2 shadow-lg shadow-blue-600/30 active:scale-95 transition-all"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  Thử lại Camera
+                </button>
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex-1 py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium flex items-center justify-center gap-2 border border-slate-700 active:scale-95 transition-all"
+                >
+                  <FolderOpen className="w-4 h-4" />
+                  Chọn từ máy
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Darkened Mask Overlay with Cutout Guided Frame */}
+          {isCameraReady && guideRect.width > 0 && (
+            <div className="absolute inset-0 z-10 pointer-events-none">
+              <svg className="w-full h-full">
+                <defs>
+                  <mask id="guided-mask">
+                    {/* White everywhere (darken) */}
+                    <rect width="100%" height="100%" fill="white" />
+                    {/* Black cutout inside the guide rect (transparent video shines through) */}
+                    <rect
+                      x={guideRect.x}
+                      y={guideRect.y}
+                      width={guideRect.width}
+                      height={guideRect.height}
+                      rx="14"
+                      ry="14"
+                      fill="black"
+                    />
+                  </mask>
+                </defs>
+                {/* Semi-transparent dark mask covering everything except the guide box */}
+                <rect
+                  width="100%"
+                  height="100%"
+                  fill="rgba(3, 7, 18, 0.65)"
+                  mask="url(#guided-mask)"
+                />
+              </svg>
+
+              {/* High-Precision Guide Box Highlight & Metal Corner Brackets */}
+              <div
+                style={{
+                  left: `${guideRect.x}px`,
+                  top: `${guideRect.y}px`,
+                  width: `${guideRect.width}px`,
+                  height: `${guideRect.height}px`,
+                }}
+                className="absolute pointer-events-none rounded-2xl border-2 border-blue-400/90 shadow-[0_0_25px_rgba(59,130,246,0.35)]"
+              >
+                {/* 4 Corner L-Brackets */}
+                <div className="absolute -top-1 -left-1 w-6 h-6 border-t-4 border-l-4 border-emerald-400 rounded-tl-lg" />
+                <div className="absolute -top-1 -right-1 w-6 h-6 border-t-4 border-r-4 border-emerald-400 rounded-tr-lg" />
+                <div className="absolute -bottom-1 -left-1 w-6 h-6 border-b-4 border-l-4 border-emerald-400 rounded-bl-lg" />
+                <div className="absolute -bottom-1 -right-1 w-6 h-6 border-b-4 border-r-4 border-emerald-400 rounded-br-lg" />
+
+                {/* Subtle Rule of Thirds Guidelines */}
+                <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 opacity-20 pointer-events-none">
+                  <div className="border-r border-b border-white" />
+                  <div className="border-r border-b border-white" />
+                  <div className="border-b border-white" />
+                  <div className="border-r border-b border-white" />
+                  <div className="border-r border-b border-white" />
+                  <div className="border-b border-white" />
+                  <div className="border-r border-white" />
+                  <div className="border-r border-white" />
+                  <div />
+                </div>
+
+                {/* Center Crosshair Aim */}
+                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 flex items-center justify-center opacity-40">
+                  <div className="w-full h-[1px] bg-white" />
+                  <div className="absolute h-full w-[1px] bg-white" />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TOP BAR: Controls & Mode Switchers */}
+          <div className="relative z-20 pt-3 px-4 pb-2 flex flex-col gap-2.5 bg-gradient-to-b from-black/90 via-black/50 to-transparent">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
-                  <CheckCircle2 className="w-5 h-5" />
-                </div>
-                <div>
-                  <h4 className="text-sm font-bold text-white">
-                    {is2SidedCard
-                      ? cardSide === "front"
-                        ? "Đã chụp Mặt trước"
-                        : "Đã chụp Mặt sau"
-                      : `Đã chụp Trang ${scannedPagesCount + 1}`}
-                  </h4>
-                  <p className="text-[11px] text-slate-400">
-                    {is2SidedCard
-                      ? "Kiểm tra chất lượng trước khi quét mặt tiếp theo"
-                      : "Kiểm tra tài liệu đã căn chuẩn chưa"}
-                  </p>
-                </div>
-              </div>
-
-              {/* Adjust Corners Button */}
+              {/* Back / Close Button */}
               <button
-                id="btn-review-crop"
-                onClick={() => setIsAdjustingCrop(true)}
-                className="min-h-[38px] flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition active:scale-95"
+                onClick={onClose}
+                className="w-10 h-10 rounded-full bg-slate-900/80 backdrop-blur border border-slate-700/60 flex items-center justify-center text-slate-200 active:scale-95 transition-all"
+                title="Đóng Camera"
               >
-                <Crop className="w-3.5 h-3.5 text-blue-400" />
-                <span>Chỉnh 4 góc</span>
-              </button>
-            </div>
-
-            {/* Thumbnail Preview Area with Jumping Sheet Effect */}
-            <div className="relative w-full h-44 rounded-2xl bg-black/60 border border-slate-800 overflow-hidden flex items-center justify-center p-2">
-              <img
-                src={reviewingPage.processedImage}
-                alt="Bản quét vừa chụp"
-                className="max-h-full max-w-full object-contain rounded-lg shadow-md border border-slate-700/50"
-              />
-              <div className="absolute top-2 right-2 px-2 py-1 rounded bg-black/70 backdrop-blur text-[10px] font-semibold text-emerald-400 border border-emerald-500/30">
-                Đã xử lý & Tự căn thẳng
-              </div>
-            </div>
-
-            {/* Primary Action Buttons */}
-            <div className="grid grid-cols-2 gap-3 pt-1">
-              {/* Retake Button */}
-              <button
-                id="btn-review-retake"
-                onClick={handleRetakeCurrentPage}
-                className="min-h-[46px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-slate-200 font-semibold text-sm border border-slate-700 transition active:scale-98"
-              >
-                <Trash2 className="w-4 h-4 text-red-400" />
-                <span>Chụp lại</span>
+                <ArrowLeft className="w-5 h-5" />
               </button>
 
-              {/* Next Page / 2nd Side / Done Button */}
-              {is2SidedCard ? (
-                cardSide === "front" ? (
+              {/* Capture Mode Toggle: Từng trang (Mặc định) vs Chụp liên tục */}
+              <div className="flex items-center p-1 rounded-full bg-slate-950/85 backdrop-blur border border-slate-800 shadow-lg">
+                <button
+                  onClick={() => setCaptureMode("single")}
+                  className={`px-3 py-1 rounded-full text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                    captureMode === "single"
+                      ? "bg-blue-600 text-white shadow-md shadow-blue-600/30"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  Từng trang
+                </button>
+                <button
+                  onClick={() => setCaptureMode("batch")}
+                  className={`px-3 py-1 rounded-full text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                    captureMode === "batch"
+                      ? "bg-blue-600 text-white shadow-md shadow-blue-600/30"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  Chụp liên tục
+                  {batchPages.length > 0 && (
+                    <span className="ml-0.5 px-1.5 py-0.2 rounded-full bg-emerald-500 text-[10px] font-bold text-white">
+                      {batchPages.length}
+                    </span>
+                  )}
+                </button>
+              </div>
+
+              {/* Torch & Camera Switch */}
+              <div className="flex items-center gap-2">
+                {hasTorch && (
                   <button
-                    id="btn-review-next-side"
-                    onClick={() => handleProceedNextPage(false)}
-                    className="min-h-[46px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm transition active:scale-98 shadow-lg shadow-blue-600/30"
+                    onClick={toggleTorch}
+                    className={`w-10 h-10 rounded-full backdrop-blur border flex items-center justify-center active:scale-95 transition-all ${
+                      torchOn
+                        ? "bg-amber-400 text-slate-950 border-amber-300 shadow-lg shadow-amber-400/40"
+                        : "bg-slate-900/80 text-slate-200 border-slate-700/60"
+                    }`}
+                    title="Bật/Tắt đèn Flash"
                   >
-                    <span>Lật sang Mặt sau</span>
-                    <Plus className="w-4 h-4" />
+                    {torchOn ? <Zap className="w-5 h-5 fill-current" /> : <ZapOff className="w-5 h-5" />}
                   </button>
-                ) : (
-                  <button
-                    id="btn-review-finish-card"
-                    onClick={() => handleProceedNextPage(true)}
-                    className="min-h-[46px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm transition active:scale-98 shadow-lg shadow-emerald-600/30"
-                  >
-                    <Check className="w-4 h-4" />
-                    <span>Ghép 2 mặt & Lưu</span>
-                  </button>
-                )
+                )}
+                <button
+                  onClick={switchCamera}
+                  className="w-10 h-10 rounded-full bg-slate-900/80 backdrop-blur border border-slate-700/60 flex items-center justify-center text-slate-200 active:scale-95 transition-all"
+                  title="Đổi camera trước/sau"
+                >
+                  <RotateCcw className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Frame Ratio Presets (A4 Dọc / A4 Ngang / CCCD) */}
+            <div className="flex items-center justify-center gap-1.5 overflow-x-auto py-0.5 no-scrollbar">
+              <button
+                onClick={() => setFrameRatio("a4_portrait")}
+                className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all flex items-center gap-1 ${
+                  frameRatio === "a4_portrait"
+                    ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/60 shadow-sm"
+                    : "bg-slate-900/60 text-slate-400 border border-slate-800 hover:text-slate-200"
+                }`}
+              >
+                <div className="w-2.5 h-3.5 border border-current rounded-xs" />
+                A4 Dọc
+              </button>
+              <button
+                onClick={() => setFrameRatio("a4_landscape")}
+                className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all flex items-center gap-1 ${
+                  frameRatio === "a4_landscape"
+                    ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/60 shadow-sm"
+                    : "bg-slate-900/60 text-slate-400 border border-slate-800 hover:text-slate-200"
+                }`}
+              >
+                <div className="w-3.5 h-2.5 border border-current rounded-xs" />
+                A4 Ngang
+              </button>
+              <button
+                onClick={() => setFrameRatio("card")}
+                className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all flex items-center gap-1 ${
+                  frameRatio === "card"
+                    ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/60 shadow-sm"
+                    : "bg-slate-900/60 text-slate-400 border border-slate-800 hover:text-slate-200"
+                }`}
+              >
+                <CreditCard className="w-3 h-3" />
+                CCCD / Bằng lái
+              </button>
+              <button
+                onClick={() => setFrameRatio("free")}
+                className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all flex items-center gap-1 ${
+                  frameRatio === "free"
+                    ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/60 shadow-sm"
+                    : "bg-slate-900/60 text-slate-400 border border-slate-800 hover:text-slate-200"
+                }`}
+              >
+                <Maximize2 className="w-3 h-3" />
+                Toàn màn hình
+              </button>
+            </div>
+          </div>
+
+          {/* Floating Guidance Badge */}
+          <div className="relative z-20 flex justify-center px-4 pointer-events-none">
+            <div className="px-3.5 py-1.5 rounded-full bg-slate-950/85 backdrop-blur border border-slate-700/60 text-xs font-medium text-slate-200 shadow-lg flex items-center gap-2">
+              <Sparkles className="w-3.5 h-3.5 text-blue-400" />
+              <span>Căn tài liệu gọn trong khung & bấm nút Chụp</span>
+            </div>
+          </div>
+
+          {/* BOTTOM CONTROLS & SHUTTER BUTTON */}
+          <div className="relative z-20 pb-8 pt-4 px-6 bg-gradient-to-t from-black/95 via-black/70 to-transparent flex items-center justify-between">
+            {/* Left Slot: Gallery / Batch Stack or File Import */}
+            <div className="w-16 flex items-center justify-center">
+              {captureMode === "batch" && batchPages.length > 0 ? (
+                <button
+                  onClick={() => setShowBatchGallery(true)}
+                  className="relative group p-1 active:scale-95 transition-all"
+                  title="Xem các trang đã chụp"
+                >
+                  <div className="w-13 h-13 rounded-xl border-2 border-emerald-400 overflow-hidden shadow-lg shadow-emerald-500/30 bg-slate-900">
+                    <img
+                      src={batchPages[batchPages.length - 1].processedImage}
+                      alt="Thumbnail"
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                  {/* Badge Counter */}
+                  <div className="absolute -top-1.5 -right-1.5 px-1.5 py-0.5 rounded-full bg-emerald-500 text-white font-bold text-[11px] shadow">
+                    {batchPages.length}
+                  </div>
+                </button>
               ) : (
                 <button
-                  id="btn-review-next-page"
-                  onClick={() => handleProceedNextPage(false)}
-                  className="min-h-[46px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm transition active:scale-98 shadow-lg shadow-blue-600/30"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex flex-col items-center gap-1 text-slate-400 hover:text-white active:scale-95 transition-all"
+                  title="Chọn ảnh từ thư viện"
                 >
-                  <Plus className="w-4 h-4" />
-                  <span>Trang tiếp theo</span>
+                  <div className="w-11 h-11 rounded-full bg-slate-900/80 border border-slate-700/60 flex items-center justify-center">
+                    <ImageIcon className="w-5 h-5" />
+                  </div>
+                  <span className="text-[10px] font-medium">Thư viện</span>
                 </button>
               )}
             </div>
 
-            {/* Complete Scanning Session Button */}
-            {!is2SidedCard && (
+            {/* Center Slot: Large Shutter Button */}
+            <div className="flex flex-col items-center">
               <button
-                id="btn-review-finish-all"
-                onClick={() => handleProceedNextPage(true)}
-                className="w-full min-h-[42px] flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 text-emerald-400 text-xs font-bold border border-emerald-500/30 transition active:scale-98"
+                onClick={handleCapture}
+                disabled={!isCameraReady || isStartingCamera}
+                className={`relative w-20 h-20 rounded-full border-4 border-white flex items-center justify-center active:scale-90 transition-all shadow-[0_0_30px_rgba(255,255,255,0.25)] ${
+                  !isCameraReady ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+                }`}
+                title="Bấm để chụp ảnh"
               >
-                <Check className="w-3.5 h-3.5" />
-                <span>Hoàn tất & Mở tài liệu ({scannedPagesCount + 1} trang)</span>
+                <div className="w-16 h-16 rounded-full bg-white transition-transform duration-100 hover:scale-95 active:scale-90" />
               </button>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
+            </div>
 
-      {/* Manual Crop Adjuster Modal */}
-      {isAdjustingCrop && reviewingPage && (
+            {/* Right Slot: Finish Batch or Reset Stream */}
+            <div className="w-16 flex items-center justify-center">
+              {captureMode === "batch" && batchPages.length > 0 ? (
+                <button
+                  onClick={() => setShowBatchGallery(true)}
+                  className="flex flex-col items-center gap-1 text-emerald-400 hover:text-emerald-300 active:scale-95 transition-all"
+                >
+                  <div className="w-11 h-11 rounded-full bg-emerald-500 text-slate-950 flex items-center justify-center shadow-lg shadow-emerald-500/30">
+                    <Check className="w-6 h-6 stroke-[3]" />
+                  </div>
+                  <span className="text-[10px] font-bold">Xong ({batchPages.length})</span>
+                </button>
+              ) : (
+                <button
+                  onClick={() => startCamera(facingMode)}
+                  className="flex flex-col items-center gap-1 text-slate-400 hover:text-white active:scale-95 transition-all"
+                  title="Làm mới camera"
+                >
+                  <div className="w-11 h-11 rounded-full bg-slate-900/80 border border-slate-700/60 flex items-center justify-center">
+                    <RefreshCw className="w-5 h-5" />
+                  </div>
+                  <span className="text-[10px] font-medium">Làm mới</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Flying Thumbnail Animation into Stack (Batch Mode) */}
+          <AnimatePresence>
+            {animatingThumb && (
+              <motion.div
+                initial={{ scale: 1, opacity: 1, x: "0%", y: "0%" }}
+                animate={{ scale: 0.15, opacity: 0.7, x: "-42vw", y: "38vh" }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.5, ease: "easeInOut" }}
+                className="absolute inset-0 pointer-events-none z-40 flex items-center justify-center"
+              >
+                <div className="w-64 h-80 rounded-2xl overflow-hidden shadow-2xl border-2 border-emerald-400">
+                  <img src={animatingThumb} alt="Flying Thumb" className="w-full h-full object-cover" />
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      )}
+
+      {/* SINGLE-PAGE REVIEW SCREEN (Chế độ A) */}
+      {reviewPage && !isAdjustingCrop && (
+        <div className="relative w-full h-full flex flex-col justify-between bg-slate-950 z-30">
+          {/* Top Bar */}
+          <div className="pt-4 px-4 pb-3 flex items-center justify-between border-b border-slate-800/80 bg-slate-900/60 backdrop-blur">
+            <button
+              onClick={handleRetakeSinglePage}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-medium hover:bg-slate-700 transition-colors"
+            >
+              <RotateCcw className="w-4 h-4" />
+              Chụp lại
+            </button>
+            <span className="text-sm font-semibold text-white">Xem trước & Bộ lọc</span>
+            <button
+              onClick={() => setIsAdjustingCrop(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600/20 border border-blue-500/40 text-blue-400 text-xs font-medium hover:bg-blue-600/30 transition-colors"
+            >
+              <Crop className="w-4 h-4" />
+              Cắt 4 góc
+            </button>
+          </div>
+
+          {/* Main Image Preview */}
+          <div className="flex-1 p-4 flex items-center justify-center overflow-hidden">
+            <motion.div
+              initial={{ scale: 0.92, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="max-h-[62vh] max-w-[90vw] rounded-xl overflow-hidden shadow-2xl border border-slate-700 bg-white"
+            >
+              <img
+                src={reviewPage.processedImage}
+                alt="Scanned Preview"
+                className="max-h-[62vh] w-auto object-contain"
+              />
+            </motion.div>
+          </div>
+
+          {/* Quick Filters & Rotation Controls */}
+          <div className="px-4 py-3 bg-slate-900/90 border-t border-slate-800 flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-slate-400">Bộ lọc màu:</span>
+              <button
+                onClick={() => updateReviewFilterAndRotation(activeFilter, (rotationDeg + 90) % 360)}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium transition-colors"
+              >
+                <RotateCw className="w-3.5 h-3.5" />
+                Xoay 90°
+              </button>
+            </div>
+
+            {/* Filter Pills */}
+            <div className="grid grid-cols-4 gap-2">
+              <button
+                onClick={() => updateReviewFilterAndRotation("document", rotationDeg)}
+                className={`py-2 px-1 rounded-xl text-xs font-medium transition-all text-center ${
+                  activeFilter === "document"
+                    ? "bg-blue-600 text-white font-semibold shadow-lg shadow-blue-600/30"
+                    : "bg-slate-800 text-slate-400 hover:text-white"
+                }`}
+              >
+                Văn bản
+              </button>
+              <button
+                onClick={() => updateReviewFilterAndRotation("bw", rotationDeg)}
+                className={`py-2 px-1 rounded-xl text-xs font-medium transition-all text-center ${
+                  activeFilter === "bw"
+                    ? "bg-blue-600 text-white font-semibold shadow-lg shadow-blue-600/30"
+                    : "bg-slate-800 text-slate-400 hover:text-white"
+                }`}
+              >
+                Trắng đen
+              </button>
+              <button
+                onClick={() => updateReviewFilterAndRotation("magic", rotationDeg)}
+                className={`py-2 px-1 rounded-xl text-xs font-medium transition-all text-center ${
+                  activeFilter === "magic"
+                    ? "bg-blue-600 text-white font-semibold shadow-lg shadow-blue-600/30"
+                    : "bg-slate-800 text-slate-400 hover:text-white"
+                }`}
+              >
+                Màu sắc
+              </button>
+              <button
+                onClick={() => updateReviewFilterAndRotation("original", rotationDeg)}
+                className={`py-2 px-1 rounded-xl text-xs font-medium transition-all text-center ${
+                  activeFilter === "original"
+                    ? "bg-blue-600 text-white font-semibold shadow-lg shadow-blue-600/30"
+                    : "bg-slate-800 text-slate-400 hover:text-white"
+                }`}
+              >
+                Ảnh gốc
+              </button>
+            </div>
+
+            {/* Bottom Actions: Chụp lại vs Sử dụng ảnh này */}
+            <div className="grid grid-cols-2 gap-3 pt-2">
+              <button
+                onClick={handleRetakeSinglePage}
+                className="py-3.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-sm flex items-center justify-center gap-2 border border-slate-700 active:scale-95 transition-all"
+              >
+                <RotateCcw className="w-4 h-4" />
+                Chụp lại
+              </button>
+              <button
+                onClick={handleUseSinglePage}
+                className="py-3.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/30 active:scale-95 transition-all"
+              >
+                <Check className="w-5 h-5 stroke-[2.5]" />
+                Sử dụng ảnh này
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CROP ADJUSTER SCREEN */}
+      {reviewPage && isAdjustingCrop && (
         <CropAdjuster
-          imageSrc={reviewingPage.originalImage}
-          initialQuad={reviewingPage.quad}
-          aspectMode={mode === "cccd" || mode === "driver_license" ? "card" : "document"}
-          onComplete={handleCropAdjustComplete}
+          imageSrc={reviewPage.originalImage}
+          initialQuad={reviewPage.quad}
+          aspectMode={frameRatio === "card" ? "card" : "document"}
+          onComplete={handleCropComplete}
           onCancel={() => setIsAdjustingCrop(false)}
         />
       )}
 
-      {/* Bottom Camera Controller Bar */}
-      {scannerState !== "REVIEW" && (
-        <div className="relative z-30 flex flex-col bg-gradient-to-t from-black/95 via-black/80 to-transparent pt-2 pb-safe px-4">
-          {/* Mode Selector Horizontal Scroll */}
-          <div className="flex items-center justify-center gap-1.5 py-2 overflow-x-auto no-scrollbar">
-            {[
-              { id: "document", label: "Tài liệu A4", icon: FileText },
-              { id: "cccd", label: "CCCD (2 mặt)", icon: IdCard },
-              { id: "driver_license", label: "Bằng lái", icon: Award },
-              { id: "card", label: "Thẻ Card", icon: CreditCard },
-              { id: "photo", label: "Ảnh màu", icon: ImageIcon },
-            ].map((item) => {
-              const IconComp = item.icon;
-              const isActive = mode === item.id;
-              return (
-                <button
-                  key={item.id}
-                  id={`btn-mode-${item.id}`}
-                  onClick={() => {
-                    setMode(item.id as ScanMode);
-                    setCardSide("front");
-                  }}
-                  className={`min-h-[38px] flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold transition active:scale-95 whitespace-nowrap ${
-                    isActive
-                      ? "bg-blue-600 text-white shadow-lg shadow-blue-600/30"
-                      : "bg-slate-900/60 text-slate-300 hover:bg-slate-800/80 border border-slate-800"
-                  }`}
-                >
-                  <IconComp className="w-3.5 h-3.5" />
-                  <span>{item.label}</span>
-                </button>
-              );
-            })}
+      {/* BATCH GALLERY MODAL (Chế độ B: Quản lý nhiều trang - Microsoft Lens Style) */}
+      {showBatchGallery && (
+        <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col justify-between">
+          {/* Header */}
+          <div className="pt-4 px-4 pb-3 flex items-center justify-between border-b border-slate-800 bg-slate-900/80 backdrop-blur">
+            <button
+              onClick={() => setShowBatchGallery(false)}
+              className="flex items-center gap-1 text-slate-300 hover:text-white text-sm font-medium"
+            >
+              <ArrowLeft className="w-5 h-5" />
+              Tiếp tục chụp
+            </button>
+            <span className="text-sm font-bold text-white">
+              Đã chụp {batchPages.length} trang
+            </span>
+            <button
+              onClick={() => setBatchPages([])}
+              disabled={batchPages.length === 0}
+              className="text-red-400 hover:text-red-300 text-xs font-medium disabled:opacity-30"
+            >
+              Xóa tất cả
+            </button>
           </div>
 
-          {/* Shutter Button & Secondary Controls */}
-          <div className="flex items-center justify-between px-6 py-4">
-            {/* Device Library Import Button */}
-            <button
-              id="btn-camera-gallery"
-              onClick={() => fileInputRef.current?.click()}
-              className="min-w-[48px] min-h-[48px] flex flex-col items-center justify-center p-2 rounded-full bg-slate-900/80 backdrop-blur border border-slate-700 text-slate-200 hover:bg-slate-800 transition active:scale-95"
-              title="Chọn ảnh từ Thư viện"
-            >
-              <ImageIcon className="w-5 h-5 text-slate-300" />
-            </button>
-
-            {/* Main Shutter Button with Adobe Scan Circular Progress Countdown */}
-            <button
-              id="btn-camera-shutter"
-              onClick={handleManualCapture}
-              disabled={scannerState === "CAPTURING"}
-              className="relative w-20 h-20 sm:w-22 sm:h-22 rounded-full flex items-center justify-center shadow-2xl active:scale-95 transition-transform group"
-              title={autoCapture ? "Tự động chụp khi giữ yên hoặc bấm để chụp ngay" : "Bấm để chụp ảnh"}
-              aria-label="Chụp ảnh ngay"
-            >
-              {/* Outer SVG Auto-Capture Radial Progress Ring */}
-              <svg className="absolute inset-0 w-full h-full -rotate-90 pointer-events-none" viewBox="0 0 88 88">
-                {/* Background Track */}
-                <circle
-                  cx="44"
-                  cy="44"
-                  r="40"
-                  fill="none"
-                  stroke={autoCapture ? "rgba(255, 255, 255, 0.25)" : "rgba(255, 255, 255, 0.15)"}
-                  strokeWidth="3.5"
-                />
-                {/* Active Filling Progress Arc */}
-                {autoCapture && (
-                  <circle
-                    cx="44"
-                    cy="44"
-                    r="40"
-                    fill="none"
-                    stroke={scannerState === "READY" ? "#10b981" : "#00d2ff"}
-                    strokeWidth="4"
-                    strokeLinecap="round"
-                    strokeDasharray="251.3"
-                    strokeDashoffset={251.3 - (251.3 * Math.min(100, Math.max(0, (steadyCounter / 4) * 100))) / 100}
-                    className="transition-all duration-100 ease-linear"
-                  />
-                )}
-              </svg>
-
-              {/* Inner Camera Shutter Circle */}
-              <div
-                className={`w-15 h-15 sm:w-16 sm:h-16 rounded-full flex items-center justify-center transition-all duration-200 ${
-                  scannerState === "READY"
-                    ? "bg-emerald-500 text-slate-950 scale-105 shadow-lg shadow-emerald-500/50"
-                    : scannerState === "STABILIZING"
-                    ? "bg-cyan-400 text-slate-950 shadow-md shadow-cyan-400/40"
-                    : "bg-white text-slate-950 group-hover:bg-slate-100"
-                }`}
-              >
-                <Camera className="w-6 h-6 text-slate-950" />
+          {/* Grid of Pages */}
+          <div className="flex-1 p-4 overflow-y-auto">
+            {batchPages.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-center text-slate-400">
+                <Layers className="w-12 h-12 mb-2 opacity-40 text-slate-500" />
+                <p className="text-sm">Chưa có trang nào trong danh sách</p>
+                <button
+                  onClick={() => setShowBatchGallery(false)}
+                  className="mt-4 px-4 py-2 rounded-xl bg-blue-600 text-white text-xs font-medium"
+                >
+                  Quay lại chụp ngay
+                </button>
               </div>
-            </button>
-
-            {/* Finish Scan Session Button (if already has scanned pages) */}
-            {scannedPagesCount > 0 ? (
-              <button
-                id="btn-camera-finish-existing"
-                onClick={onFinishedScanning}
-                className="min-w-[48px] min-h-[48px] flex flex-col items-center justify-center p-2 rounded-full bg-emerald-600 text-white font-bold hover:bg-emerald-500 transition active:scale-95 shadow-lg shadow-emerald-600/30"
-                title="Xong và xem toàn bộ tài liệu"
-              >
-                <Check className="w-5 h-5" />
-                <span className="text-[10px] font-bold">{scannedPagesCount}</span>
-              </button>
             ) : (
-              <div className="w-12 h-12" />
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {batchPages.map((page, index) => (
+                  <div
+                    key={page.id || index}
+                    className="relative group rounded-xl overflow-hidden border border-slate-800 bg-slate-900 shadow-md flex flex-col"
+                  >
+                    {/* Thumbnail */}
+                    <div className="aspect-[3/4] w-full bg-white overflow-hidden relative">
+                      <img
+                        src={page.processedImage}
+                        alt={`Trang ${index + 1}`}
+                        className="w-full h-full object-contain"
+                      />
+                      {/* Page Number Badge */}
+                      <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-slate-950/80 backdrop-blur text-white text-[11px] font-bold">
+                        Trang {index + 1}
+                      </div>
+                    </div>
+
+                    {/* Card Actions */}
+                    <div className="p-2 flex items-center justify-between bg-slate-900 border-t border-slate-800">
+                      <button
+                        onClick={() => handleRotateBatchPage(index)}
+                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs"
+                        title="Xoay 90°"
+                      >
+                        <RotateCw className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => handleRemoveBatchPage(index)}
+                        className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs"
+                        title="Xóa trang này"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
+          </div>
+
+          {/* Bottom Actions for Batch Mode */}
+          <div className="p-4 bg-slate-900 border-t border-slate-800 flex items-center gap-3">
+            <button
+              onClick={() => setShowBatchGallery(false)}
+              className="flex-1 py-3.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-sm flex items-center justify-center gap-2 border border-slate-700 active:scale-95 transition-all"
+            >
+              <Plus className="w-4 h-4" />
+              Chụp thêm trang
+            </button>
+            <button
+              onClick={handleSaveAllBatchPages}
+              disabled={batchPages.length === 0}
+              className="flex-1 py-3.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/30 disabled:opacity-40 active:scale-95 transition-all"
+            >
+              <Check className="w-5 h-5 stroke-[2.5]" />
+              Hoàn tất ({batchPages.length} trang)
+            </button>
           </div>
         </div>
       )}

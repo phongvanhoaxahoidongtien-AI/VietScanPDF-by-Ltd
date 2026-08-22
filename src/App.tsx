@@ -15,6 +15,7 @@ import { OCRViewerModal } from "./components/OCRViewerModal";
 import { PDFMergeModal } from "./components/PDFMergeModal";
 import { PDFSplitModal } from "./components/PDFSplitModal";
 import { PDFHighlightModal } from "./components/PDFHighlightModal";
+import { PDFToJPEGModal } from "./components/PDFToJPEGModal";
 import { QRGeneratorModal } from "./components/QRGeneratorModal";
 import { QRScannerModal } from "./components/QRScannerModal";
 import { ImportTypeModal, ImportTypeChoice } from "./components/ImportTypeModal";
@@ -38,6 +39,7 @@ export default function App() {
   const [isPDFMergeOpen, setIsPDFMergeOpen] = useState<boolean>(false);
   const [isPDFSplitOpen, setIsPDFSplitOpen] = useState<boolean>(false);
   const [isPDFHighlightOpen, setIsPDFHighlightOpen] = useState<boolean>(false);
+  const [isPDFToJPEGOpen, setIsPDFToJPEGOpen] = useState<boolean>(false);
 
   // QR Code Modals
   const [isQRGeneratorOpen, setIsQRGeneratorOpen] = useState<boolean>(false);
@@ -273,6 +275,7 @@ export default function App() {
               onOpenPDFMerge={() => setIsPDFMergeOpen(true)}
               onOpenPDFSplit={() => setIsPDFSplitOpen(true)}
               onOpenPDFHighlight={() => setIsPDFHighlightOpen(true)}
+              onOpenPDFToJPEG={() => setIsPDFToJPEGOpen(true)}
               onOpenQRGenerator={() => setIsQRGeneratorOpen(true)}
               onOpenQRScanner={() => setIsQRScannerOpen(true)}
               recentDocuments={allDocuments}
@@ -341,6 +344,17 @@ export default function App() {
 
       {isPDFHighlightOpen && (
         <PDFHighlightModal onClose={() => setIsPDFHighlightOpen(false)} />
+      )}
+
+      {/* PDF to JPEG Modal */}
+      {isPDFToJPEGOpen && (
+        <PDFToJPEGModal
+          onClose={() => setIsPDFToJPEGOpen(false)}
+          availableSavedDocs={allDocuments}
+          onSavedToDocuments={(newDoc) => {
+            setAllDocuments((prev) => [newDoc, ...prev.filter((d) => d.id !== newDoc.id)]);
+          }}
+        />
       )}
 
       {/* QR Code Modals */}
