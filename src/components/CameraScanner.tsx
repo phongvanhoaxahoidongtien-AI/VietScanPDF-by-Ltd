@@ -99,30 +99,102 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
   const [selectedBatchIndex, setSelectedBatchIndex] = useState<number | null>(null);
   const [animatingThumb, setAnimatingThumb] = useState<string | null>(null);
 
-  // Play synthetic camera shutter audio
+  // Play authentic vintage mechanical SLR camera shutter audio
   const playShutterSound = useCallback(() => {
     try {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       if (!AudioCtx) return;
       const ctx = new AudioCtx();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(900, ctx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(150, ctx.currentTime + 0.08);
-      gain.gain.setValueAtTime(0.3, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.08);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.08);
+      const now = ctx.currentTime;
+
+      // Noise buffer for mechanical shutter sound effects
+      const bufferSize = Math.floor(ctx.sampleRate * 0.22);
+      const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+      const output = noiseBuffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        output[i] = Math.random() * 2 - 1;
+      }
+
+      // 1. Initial Mirror Flip & Mechanical Click (t = 0)
+      const clickOsc = ctx.createOscillator();
+      const clickGain = ctx.createGain();
+      clickOsc.type = "triangle";
+      clickOsc.frequency.setValueAtTime(1400, now);
+      clickOsc.frequency.exponentialRampToValueAtTime(120, now + 0.035);
+      clickGain.gain.setValueAtTime(0.4, now);
+      clickGain.gain.exponentialRampToValueAtTime(0.001, now + 0.035);
+      clickOsc.connect(clickGain);
+      clickGain.connect(ctx.destination);
+      clickOsc.start(now);
+      clickOsc.stop(now + 0.04);
+
+      // 2. First Curtain Release Mechanical Noise
+      const noise1 = ctx.createBufferSource();
+      noise1.buffer = noiseBuffer;
+      const filter1 = ctx.createBiquadFilter();
+      filter1.type = "bandpass";
+      filter1.frequency.setValueAtTime(2200, now);
+      filter1.Q.setValueAtTime(3.0, now);
+      const noiseGain1 = ctx.createGain();
+      noiseGain1.gain.setValueAtTime(0.35, now);
+      noiseGain1.gain.exponentialRampToValueAtTime(0.001, now + 0.045);
+      noise1.connect(filter1);
+      filter1.connect(noiseGain1);
+      noiseGain1.connect(ctx.destination);
+      noise1.start(now);
+      noise1.stop(now + 0.05);
+
+      // 3. Second Curtain Closure & Mirror Slap ("CLACK", t = 0.065s)
+      const clackTime = now + 0.065;
+      const slapOsc = ctx.createOscillator();
+      const slapGain = ctx.createGain();
+      slapOsc.type = "sawtooth";
+      slapOsc.frequency.setValueAtTime(320, clackTime);
+      slapOsc.frequency.exponentialRampToValueAtTime(60, clackTime + 0.06);
+      slapGain.gain.setValueAtTime(0.45, clackTime);
+      slapGain.gain.exponentialRampToValueAtTime(0.001, clackTime + 0.07);
+      slapOsc.connect(slapGain);
+      slapGain.connect(ctx.destination);
+      slapOsc.start(clackTime);
+      slapOsc.stop(clackTime + 0.08);
+
+      // 4. Metallic Body Resonance & Spring Rustle
+      const noise2 = ctx.createBufferSource();
+      noise2.buffer = noiseBuffer;
+      const filter2 = ctx.createBiquadFilter();
+      filter2.type = "bandpass";
+      filter2.frequency.setValueAtTime(1400, clackTime);
+      filter2.Q.setValueAtTime(2.5, clackTime);
+      const noiseGain2 = ctx.createGain();
+      noiseGain2.gain.setValueAtTime(0.45, clackTime);
+      noiseGain2.gain.exponentialRampToValueAtTime(0.001, clackTime + 0.09);
+      noise2.connect(filter2);
+      filter2.connect(noiseGain2);
+      noiseGain2.connect(ctx.destination);
+      noise2.start(clackTime);
+      noise2.stop(clackTime + 0.1);
+
+      // 5. Mechanical Spring Reset Echo (t = 0.12s)
+      const springTime = now + 0.12;
+      const springOsc = ctx.createOscillator();
+      const springGain = ctx.createGain();
+      springOsc.type = "sine";
+      springOsc.frequency.setValueAtTime(850, springTime);
+      springOsc.frequency.exponentialRampToValueAtTime(250, springTime + 0.04);
+      springGain.gain.setValueAtTime(0.18, springTime);
+      springGain.gain.exponentialRampToValueAtTime(0.001, springTime + 0.04);
+      springOsc.connect(springGain);
+      springGain.connect(ctx.destination);
+      springOsc.start(springTime);
+      springOsc.stop(springTime + 0.05);
     } catch {
-      // Audio context might be restricted before gesture
+      // Audio context might be restricted before user gesture
     }
 
+    // Classic tactile double-pulse vibration (Mirror slap + spring return)
     if (typeof navigator !== "undefined" && navigator.vibrate) {
       try {
-        navigator.vibrate([35, 20, 35]);
+        navigator.vibrate([25, 30, 45]);
       } catch {}
     }
   }, []);
@@ -716,7 +788,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           )}
 
           {/* TOP BAR: Controls & Mode Switchers */}
-          <div className="relative z-30 pt-safe-top pt-4 px-4 pb-3 flex flex-col gap-3 bg-gradient-to-b from-black/95 via-black/80 to-transparent shrink-0">
+          <div className="relative z-30 pt-safe-top px-3 sm:px-4 pb-3 flex flex-col gap-2.5 bg-gradient-to-b from-black/95 via-black/80 to-transparent shrink-0">
             <div className="flex items-center justify-between">
               {/* Back / Close Button */}
               <button
@@ -944,7 +1016,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
       {reviewPage && !isAdjustingCrop && (
         <div className="relative w-full h-full flex flex-col justify-between bg-slate-950 z-30">
           {/* Top Bar */}
-          <div className="pt-safe-top pt-4 px-4 pb-3 flex items-center justify-between border-b border-slate-800/80 bg-slate-900/95 backdrop-blur shrink-0">
+          <div className="pt-safe-top px-3 sm:px-4 pb-3 flex items-center justify-between border-b border-slate-800/80 bg-slate-900/95 backdrop-blur shrink-0">
             <button
               id="btn-review-retake"
               onClick={handleRetakeSinglePage}
@@ -1072,7 +1144,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
       {showBatchGallery && (
         <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col justify-between">
           {/* Header */}
-          <div className="pt-safe-top pt-4 px-4 pb-3 flex items-center justify-between border-b border-slate-800 bg-slate-900/95 backdrop-blur shrink-0">
+          <div className="pt-safe-top px-3 sm:px-4 pb-3 flex items-center justify-between border-b border-slate-800 bg-slate-900/95 backdrop-blur shrink-0">
             <button
               id="btn-batch-back"
               onClick={() => setShowBatchGallery(false)}

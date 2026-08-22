@@ -17,14 +17,14 @@ export const ImportTypeModal: React.FC<ImportTypeModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pt-safe-top pb-safe bg-slate-950/85 backdrop-blur-md select-none animate-in fade-in duration-200">
-      <div className="relative w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col">
+    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center p-3 sm:p-4 pt-safe-top pb-safe bg-slate-950/85 backdrop-blur-md select-none overflow-hidden animate-in fade-in duration-200">
+      <div className="relative w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[calc(100dvh-2.5rem)]">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 bg-slate-900/95">
+        <div className="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-4 border-b border-slate-800 bg-slate-900/95 shrink-0">
           <div className="flex items-center gap-2.5">
             <button
               onClick={onClose}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-750 active:bg-slate-700 border border-slate-700 text-slate-200 hover:text-white transition text-xs font-semibold"
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 active:bg-slate-700 border border-slate-700 text-slate-200 hover:text-white transition text-xs font-semibold min-h-[40px]"
             >
               <ArrowLeft className="w-4 h-4 text-blue-400" />
               <span>Quay lại</span>

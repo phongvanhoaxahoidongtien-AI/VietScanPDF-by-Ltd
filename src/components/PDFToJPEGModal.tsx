@@ -846,8 +846,8 @@ export const PDFToJPEGModal: React.FC<PDFToJPEGModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 pt-safe-top pb-safe bg-slate-950/90 backdrop-blur-md select-none animate-in fade-in duration-200">
-      <div className="relative w-full max-w-5xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col h-[94vh] max-h-[94vh]">
+    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center p-2 sm:p-4 pt-safe-top pb-safe bg-slate-950/90 backdrop-blur-md select-none overflow-hidden animate-in fade-in duration-200">
+      <div className="relative w-full max-w-5xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col h-full max-h-[calc(100dvh-2.5rem)]">
         {/* Toast Notification */}
         {toastMessage && (
           <div className="fixed top-5 left-1/2 -translate-x-1/2 z-[100] px-4 py-2.5 rounded-2xl bg-blue-600/95 backdrop-blur-md text-white text-xs font-semibold shadow-2xl border border-blue-400/30 flex items-center gap-2 animate-in slide-in-from-top duration-200">

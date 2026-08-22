@@ -435,8 +435,8 @@ export const PDFHighlightModal: React.FC<PDFHighlightModalProps> = ({ onClose })
   const canRedo = currentPage && (redoMap[currentPage.id] || []).length > 0;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 pt-safe-top pb-safe bg-slate-950/90 backdrop-blur-md select-none">
-      <div className="relative w-full max-w-5xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col h-[90vh] max-h-[90vh]">
+    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center p-2 sm:p-4 pt-safe-top pb-safe bg-slate-950/90 backdrop-blur-md select-none overflow-hidden animate-in fade-in duration-200">
+      <div className="relative w-full max-w-5xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col h-full max-h-[calc(100dvh-2.5rem)]">
         {/* Modal Header */}
         <div className="flex items-center justify-between px-3 sm:px-5 py-3 border-b border-slate-800 bg-slate-900/95 shrink-0 gap-2">
           <div className="flex items-center gap-2 sm:gap-3">
