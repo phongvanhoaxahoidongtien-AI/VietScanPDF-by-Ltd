@@ -33,6 +33,7 @@ import { PDFPageCropModal } from "./PDFPageCropModal";
 
 interface PDFHighlightModalProps {
   onClose: () => void;
+  initialFile?: File | null;
 }
 
 const HIGHLIGHT_COLORS = [
@@ -51,7 +52,7 @@ const BRUSH_SIZES = [
   { label: "Đậm (Tiêu đề)", sizeFactor: 0.035, px: 35 },
 ];
 
-export const PDFHighlightModal: React.FC<PDFHighlightModalProps> = ({ onClose }) => {
+export const PDFHighlightModal: React.FC<PDFHighlightModalProps> = ({ onClose, initialFile }) => {
   const [file, setFile] = useState<File | null>(null);
   const [pages, setPages] = useState<PDFPageItem[]>([]);
   const [currentPageIndex, setCurrentPageIndex] = useState<number>(0);
@@ -101,13 +102,8 @@ export const PDFHighlightModal: React.FC<PDFHighlightModalProps> = ({ onClose })
   const currentPage = pages[currentPageIndex] || null;
   const currentHighlights = currentPage ? highlightsMap[currentPage.id] || [] : [];
 
-  // File loading handler
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-
-    const f = files[0];
-    if (f.type !== "application/pdf" && !f.name.toLowerCase().endsWith(".pdf")) {
+  const loadFile = async (f: File) => {
+    if (!f.type.includes("pdf") && !f.name.toLowerCase().endsWith(".pdf")) {
       setErrorMsg("Tệp đã chọn không phải định dạng PDF.");
       return;
     }
@@ -131,8 +127,23 @@ export const PDFHighlightModal: React.FC<PDFHighlightModalProps> = ({ onClose })
       setErrorMsg(err.message || "Không thể đọc tệp PDF. Vui lòng kiểm tra lại tệp.");
     } finally {
       setIsExtracting(false);
-      if (e.target) e.target.value = "";
     }
+  };
+
+  useEffect(() => {
+    if (initialFile) {
+      loadFile(initialFile);
+    }
+  }, [initialFile]);
+
+  // File loading handler
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    const f = files[0];
+    await loadFile(f);
+    if (e.target) e.target.value = "";
   };
 
   // Convert client pointer event coordinates to normalized page coordinate (0..1)
@@ -408,7 +419,7 @@ export const PDFHighlightModal: React.FC<PDFHighlightModalProps> = ({ onClose })
 
       const blob = await PDFToolsEngine.generatePDFFromPages(processedPages);
       const url = URL.createObjectURL(blob);
-      const fileName = `Highlight_${generateDocumentFileName()}`;
+      const fileName = generateDocumentFileName();
 
       setHighlightedBlob(blob);
       setHighlightedPdfUrl(url);

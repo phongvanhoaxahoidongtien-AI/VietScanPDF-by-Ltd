@@ -16,6 +16,7 @@ import {
   QrCode,
   ScanLine,
   FileImage,
+  Edit3,
 } from "lucide-react";
 import { ScanMode, ScannedDocument } from "../types";
 
@@ -26,6 +27,7 @@ interface HomeScreenProps {
   onOpenPDFSplit: () => void;
   onOpenPDFHighlight: () => void;
   onOpenPDFToJPEG: () => void;
+  onOpenDocumentEditor: () => void;
   onOpenQRGenerator: () => void;
   onOpenQRScanner: () => void;
   recentDocuments: ScannedDocument[];
@@ -40,6 +42,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onOpenPDFSplit,
   onOpenPDFHighlight,
   onOpenPDFToJPEG,
+  onOpenDocumentEditor,
   onOpenQRGenerator,
   onOpenQRScanner,
   recentDocuments,
@@ -101,57 +104,72 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Chế độ quét chuyên dụng</h3>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {/* CCCD 2 mặt */}
-          <button
-            id="card-mode-cccd"
-            onClick={() => onStartScan("cccd")}
-            className="flex flex-col items-start p-4 rounded-2xl bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-blue-500/50 active:scale-95 transition text-left group shadow-sm"
-          >
-            <div className="p-3 rounded-xl bg-blue-500/10 text-blue-400 group-hover:bg-blue-600 group-hover:text-white transition mb-3">
-              <IdCard className="w-6 h-6" />
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {/* Nhóm Giấy tờ tùy thân (CCCD & Giấy phép lái xe dạng thẻ 2 mặt) */}
+          <div className="sm:col-span-1 flex flex-col justify-between p-3.5 rounded-2xl bg-slate-900 border border-slate-800 shadow-sm">
+            <div className="flex items-center gap-2 mb-2 pb-2 border-b border-slate-800/80">
+              <div className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 shrink-0">
+                <IdCard className="w-4 h-4" />
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-white">Giấy tờ tùy thân</h4>
+                <p className="text-[10px] text-slate-400">Dạng thẻ • Ghép 2 mặt vào 1 trang A4</p>
+              </div>
             </div>
-            <h4 className="text-sm font-bold text-white group-hover:text-blue-400 transition">CCCD 2 Mặt</h4>
-            <p className="text-[11px] text-slate-400 mt-0.5">Ghép 2 mặt lên 1 trang A4</p>
-          </button>
 
-          {/* Bằng lái xe 2 mặt */}
-          <button
-            id="card-mode-driver-license"
-            onClick={() => onStartScan("driver_license")}
-            className="flex flex-col items-start p-4 rounded-2xl bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-emerald-500/50 active:scale-95 transition text-left group shadow-sm"
-          >
-            <div className="p-3 rounded-xl bg-emerald-500/10 text-emerald-400 group-hover:bg-emerald-600 group-hover:text-white transition mb-3">
-              <CreditCard className="w-6 h-6" />
+            <div className="grid grid-cols-2 gap-2 mt-auto">
+              <button
+                id="card-mode-cccd"
+                onClick={() => onStartScan("cccd")}
+                className="flex flex-col items-center justify-center p-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-750 active:bg-slate-700 border border-slate-700/60 hover:border-blue-500/50 active:scale-95 transition text-center group"
+              >
+                <IdCard className="w-5 h-5 text-blue-400 mb-1.5 group-hover:scale-110 transition" />
+                <span className="text-xs font-bold text-white group-hover:text-blue-400 transition">CCCD 2 mặt</span>
+                <span className="text-[9px] text-slate-400 mt-0.5">Mặt trước & sau</span>
+              </button>
+
+              <button
+                id="card-mode-driver-license"
+                onClick={() => onStartScan("driver_license")}
+                className="flex flex-col items-center justify-center p-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-750 active:bg-slate-700 border border-slate-700/60 hover:border-emerald-500/50 active:scale-95 transition text-center group"
+              >
+                <CreditCard className="w-5 h-5 text-emerald-400 mb-1.5 group-hover:scale-110 transition" />
+                <span className="text-xs font-bold text-white group-hover:text-emerald-400 transition">Giấy phép lái xe</span>
+                <span className="text-[9px] text-slate-400 mt-0.5">Thẻ GPLX 2 mặt</span>
+              </button>
             </div>
-            <h4 className="text-sm font-bold text-white group-hover:text-emerald-400 transition">Bằng Lái Xe</h4>
-            <p className="text-[11px] text-slate-400 mt-0.5">Tự căn chỉnh & ghép trang</p>
-          </button>
+          </div>
 
           {/* Bằng cấp / Chứng chỉ */}
           <button
             id="card-mode-certificate"
             onClick={() => onStartScan("certificate")}
-            className="flex flex-col items-start p-4 rounded-2xl bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-purple-500/50 active:scale-95 transition text-left group shadow-sm"
+            className="flex flex-col justify-between p-4 rounded-2xl bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-purple-500/50 active:scale-95 transition text-left group shadow-sm min-h-[120px]"
           >
-            <div className="p-3 rounded-xl bg-purple-500/10 text-purple-400 group-hover:bg-purple-600 group-hover:text-white transition mb-3">
-              <Award className="w-6 h-6" />
+            <div>
+              <div className="p-3 rounded-xl bg-purple-500/10 text-purple-400 group-hover:bg-purple-600 group-hover:text-white transition mb-2.5 w-fit">
+                <Award className="w-5 h-5" />
+              </div>
+              <h4 className="text-sm font-bold text-white group-hover:text-purple-400 transition">Bằng Cấp</h4>
+              <p className="text-[11px] text-slate-400 mt-0.5">Giấy khen, chứng chỉ khổ lớn A4</p>
             </div>
-            <h4 className="text-sm font-bold text-white group-hover:text-purple-400 transition">Bằng Cấp</h4>
-            <p className="text-[11px] text-slate-400 mt-0.5">Giấy khen, chứng chỉ khổ A4</p>
+            <div className="text-[10px] text-purple-400/80 font-medium mt-2">Quét trang đơn sắc nét</div>
           </button>
 
           {/* Nhập ảnh từ máy */}
           <button
             id="card-mode-import"
             onClick={onImportPhotos}
-            className="flex flex-col items-start p-4 rounded-2xl bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-amber-500/50 active:scale-95 transition text-left group shadow-sm"
+            className="flex flex-col justify-between p-4 rounded-2xl bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-amber-500/50 active:scale-95 transition text-left group shadow-sm min-h-[120px]"
           >
-            <div className="p-3 rounded-xl bg-amber-500/10 text-amber-400 group-hover:bg-amber-600 group-hover:text-white transition mb-3">
-              <Upload className="w-6 h-6" />
+            <div>
+              <div className="p-3 rounded-xl bg-amber-500/10 text-amber-400 group-hover:bg-amber-600 group-hover:text-white transition mb-2.5 w-fit">
+                <Upload className="w-5 h-5" />
+              </div>
+              <h4 className="text-sm font-bold text-white group-hover:text-amber-400 transition">Nhập Ảnh</h4>
+              <p className="text-[11px] text-slate-400 mt-0.5">Chọn ảnh có sẵn từ thư viện máy</p>
             </div>
-            <h4 className="text-sm font-bold text-white group-hover:text-amber-400 transition">Nhập Ảnh</h4>
-            <p className="text-[11px] text-slate-400 mt-0.5">Xử lý ảnh có sẵn trong máy</p>
+            <div className="text-[10px] text-amber-400/80 font-medium mt-2">Cắt góc & làm phẳng tự động</div>
           </button>
         </div>
       </div>
@@ -162,7 +180,32 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">PDF Tools</h3>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {/* Chỉnh sửa tài liệu (NEW) */}
+          <button
+            id="btn-tool-doc-editor"
+            onClick={onOpenDocumentEditor}
+            className="sm:col-span-2 lg:col-span-3 flex items-center gap-3.5 p-4 rounded-2xl bg-gradient-to-r from-blue-950/60 via-slate-900 to-slate-900 hover:bg-slate-850 border border-blue-500/30 hover:border-blue-500/60 active:scale-[0.98] transition text-left group shadow-sm"
+          >
+            <div className="p-3 rounded-xl bg-blue-600/20 text-blue-400 border border-blue-500/30 group-hover:bg-blue-600 group-hover:text-white transition shrink-0">
+              <Edit3 className="w-5 h-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <h4 className="text-sm font-bold text-white group-hover:text-blue-400 transition">
+                  Chỉnh sửa tài liệu
+                </h4>
+                <span className="px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-300 text-[10px] font-bold border border-blue-500/30">
+                  MỚI • PDF / Word / Excel
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Hỗ trợ PDF / Word / Excel – chuyển thành PDF vừa trang, sắp xếp & chỉnh sửa
+              </p>
+            </div>
+            <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-blue-400 group-hover:translate-x-0.5 transition shrink-0" />
+          </button>
+
           {/* Merge PDF */}
           <button
             id="btn-tool-merge-pdf"
@@ -212,17 +255,18 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           <button
             id="btn-tool-pdf-to-jpeg"
             onClick={onOpenPDFToJPEG}
-            className="flex items-center gap-3.5 p-4 rounded-2xl bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-cyan-500/40 active:scale-[0.98] transition text-left group shadow-sm"
+            className="sm:col-span-2 lg:col-span-3 flex items-center gap-3.5 p-4 rounded-2xl bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-cyan-500/40 active:scale-[0.98] transition text-left group shadow-sm"
           >
             <div className="p-3 rounded-xl bg-cyan-500/10 text-cyan-400 group-hover:bg-cyan-600 group-hover:text-white transition shrink-0">
               <FileImage className="w-5 h-5" />
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <h4 className="text-sm font-bold text-white group-hover:text-cyan-400 transition">PDF to JPEG</h4>
-              <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-2">
+              <p className="text-[11px] text-slate-400 mt-0.5">
                 Chuyển từng trang PDF thành ảnh JPEG chất lượng cao, xem & chỉnh sửa trước khi lưu
               </p>
             </div>
+            <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-cyan-400 group-hover:translate-x-0.5 transition shrink-0" />
           </button>
         </div>
       </div>

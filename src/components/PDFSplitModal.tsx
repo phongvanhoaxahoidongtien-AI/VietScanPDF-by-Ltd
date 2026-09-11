@@ -201,7 +201,7 @@ export const PDFSplitModal: React.FC<PDFSplitModalProps> = ({ onClose }) => {
     try {
       const blob = await PDFToolsEngine.generatePDFFromPages(selectedPages);
       const url = URL.createObjectURL(blob);
-      const fileName = `Tach_${generateDocumentFileName()}`;
+      const fileName = generateDocumentFileName();
 
       setSplitBlob(blob);
       setSplitPdfUrl(url);

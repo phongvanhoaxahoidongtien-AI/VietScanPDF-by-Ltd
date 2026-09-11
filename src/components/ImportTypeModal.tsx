@@ -86,7 +86,7 @@ export const ImportTypeModal: React.FC<ImportTypeModalProps> = ({
             <div className="flex-1">
               <div className="flex items-center gap-2">
                 <h4 className="text-base font-bold text-white group-hover:text-emerald-400 transition">
-                  CCCD / Bằng lái xe / Thẻ ID
+                  CCCD / Giấy phép lái xe / Thẻ ID
                 </h4>
                 <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-[10px] font-bold border border-emerald-500/20">
                   Chuẩn 1 trang A4

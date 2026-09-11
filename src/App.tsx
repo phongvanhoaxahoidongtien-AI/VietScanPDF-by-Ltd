@@ -19,6 +19,7 @@ import { PDFToJPEGModal } from "./components/PDFToJPEGModal";
 import { QRGeneratorModal } from "./components/QRGeneratorModal";
 import { QRScannerModal } from "./components/QRScannerModal";
 import { ImportTypeModal, ImportTypeChoice } from "./components/ImportTypeModal";
+import { DocumentEditorModal } from "./components/DocumentEditorModal";
 
 export default function App() {
   // Navigation & View States
@@ -40,6 +41,9 @@ export default function App() {
   const [isPDFSplitOpen, setIsPDFSplitOpen] = useState<boolean>(false);
   const [isPDFHighlightOpen, setIsPDFHighlightOpen] = useState<boolean>(false);
   const [isPDFToJPEGOpen, setIsPDFToJPEGOpen] = useState<boolean>(false);
+  const [isDocumentEditorOpen, setIsDocumentEditorOpen] = useState<boolean>(false);
+  const [pendingHighlightFile, setPendingHighlightFile] = useState<File | null>(null);
+  const [pendingJpegFile, setPendingJpegFile] = useState<File | null>(null);
 
   // QR Code Modals
   const [isQRGeneratorOpen, setIsQRGeneratorOpen] = useState<boolean>(false);
@@ -276,6 +280,7 @@ export default function App() {
               onOpenPDFSplit={() => setIsPDFSplitOpen(true)}
               onOpenPDFHighlight={() => setIsPDFHighlightOpen(true)}
               onOpenPDFToJPEG={() => setIsPDFToJPEGOpen(true)}
+              onOpenDocumentEditor={() => setIsDocumentEditorOpen(true)}
               onOpenQRGenerator={() => setIsQRGeneratorOpen(true)}
               onOpenQRScanner={() => setIsQRScannerOpen(true)}
               recentDocuments={allDocuments}
@@ -343,16 +348,47 @@ export default function App() {
       )}
 
       {isPDFHighlightOpen && (
-        <PDFHighlightModal onClose={() => setIsPDFHighlightOpen(false)} />
+        <PDFHighlightModal
+          initialFile={pendingHighlightFile || undefined}
+          onClose={() => {
+            setIsPDFHighlightOpen(false);
+            setPendingHighlightFile(null);
+          }}
+        />
       )}
 
       {/* PDF to JPEG Modal */}
       {isPDFToJPEGOpen && (
         <PDFToJPEGModal
-          onClose={() => setIsPDFToJPEGOpen(false)}
+          initialFile={pendingJpegFile || undefined}
+          onClose={() => {
+            setIsPDFToJPEGOpen(false);
+            setPendingJpegFile(null);
+          }}
           availableSavedDocs={allDocuments}
           onSavedToDocuments={(newDoc) => {
             setAllDocuments((prev) => [newDoc, ...prev.filter((d) => d.id !== newDoc.id)]);
+          }}
+        />
+      )}
+
+      {/* Document Editor Modal (PDF / Word / Excel) */}
+      {isDocumentEditorOpen && (
+        <DocumentEditorModal
+          isOpen={isDocumentEditorOpen}
+          onClose={() => setIsDocumentEditorOpen(false)}
+          onSaveToDocuments={(newDoc) => {
+            setAllDocuments((prev) => [newDoc, ...prev.filter((d) => d.id !== newDoc.id)]);
+          }}
+          onForwardToHighlight={(file) => {
+            setPendingHighlightFile(file);
+            setIsDocumentEditorOpen(false);
+            setIsPDFHighlightOpen(true);
+          }}
+          onForwardToPDFToJPEG={(file) => {
+            setPendingJpegFile(file);
+            setIsDocumentEditorOpen(false);
+            setIsPDFToJPEGOpen(true);
           }}
         />
       )}

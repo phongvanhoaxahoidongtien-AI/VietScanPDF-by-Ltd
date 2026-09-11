@@ -54,6 +54,7 @@ export interface PDFToJPEGModalProps {
   onClose: () => void;
   onSavedToDocuments?: (newDoc: ScannedDocument) => void;
   availableSavedDocs?: ScannedDocument[];
+  initialFile?: File | null;
 }
 
 interface RawPDFPageInfo {
@@ -92,6 +93,7 @@ export const PDFToJPEGModal: React.FC<PDFToJPEGModalProps> = ({
   onClose,
   onSavedToDocuments,
   availableSavedDocs = [],
+  initialFile,
 }) => {
   // Main Step State
   const [currentStep, setCurrentStep] = useState<Step>("select");
@@ -262,6 +264,12 @@ export const PDFToJPEGModal: React.FC<PDFToJPEGModalProps> = ({
       setIsLoadingPdf(false);
     }
   };
+
+  useEffect(() => {
+    if (initialFile) {
+      handleFileSelected(initialFile);
+    }
+  }, [initialFile]);
 
   // Select all or toggle pages
   const handleTogglePage = (pageNumber: number) => {

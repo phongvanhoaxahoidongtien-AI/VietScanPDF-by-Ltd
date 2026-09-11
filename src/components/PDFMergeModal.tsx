@@ -191,7 +191,7 @@ export const PDFMergeModal: React.FC<PDFMergeModalProps> = ({ onClose }) => {
     try {
       const blob = await PDFToolsEngine.generatePDFFromPages(pages);
       const url = URL.createObjectURL(blob);
-      const fileName = `Ghep_${generateDocumentFileName()}`;
+      const fileName = generateDocumentFileName();
 
       setMergedBlob(blob);
       setMergedPdfUrl(url);

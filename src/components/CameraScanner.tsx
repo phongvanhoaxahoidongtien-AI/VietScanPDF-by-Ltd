@@ -892,7 +892,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
                 }`}
               >
                 <CreditCard className="w-3 h-3" />
-                CCCD / Bằng lái
+                CCCD / Giấy phép lái xe
               </button>
               <button
                 onClick={() => setFrameRatio("free")}

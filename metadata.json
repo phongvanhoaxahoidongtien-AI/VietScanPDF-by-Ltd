@@ -1,6 +1,6 @@
 {
   "name": "VietScanPDF",
-  "description": "Ứng dụng quét tài liệu, CCCD, bằng lái xe chuẩn A4, tạo file PDF, ghép 2 mặt thẻ, OCR tiếng Việt, Merge/Split/Highlight PDF và chuyển đổi PDF to JPEG chất lượng cao.",
+  "description": "Ứng dụng quét tài liệu, CCCD, giấy phép lái xe chuẩn A4, tạo file PDF, chỉnh sửa tài liệu PDF/Word/Excel, ghép 2 mặt thẻ, OCR tiếng Việt, Merge/Split/Highlight PDF và PDF to JPEG.",
   "requestFramePermissions": ["camera"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
