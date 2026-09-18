@@ -20,6 +20,8 @@ import { QRGeneratorModal } from "./components/QRGeneratorModal";
 import { QRScannerModal } from "./components/QRScannerModal";
 import { ImportTypeModal, ImportTypeChoice } from "./components/ImportTypeModal";
 import { DocumentEditorModal } from "./components/DocumentEditorModal";
+import { PDFSignatureModal } from "./components/PDFSignatureModal";
+import { PDFToWordModal } from "./components/PDFToWordModal";
 
 export default function App() {
   // Navigation & View States
@@ -41,6 +43,8 @@ export default function App() {
   const [isPDFSplitOpen, setIsPDFSplitOpen] = useState<boolean>(false);
   const [isPDFHighlightOpen, setIsPDFHighlightOpen] = useState<boolean>(false);
   const [isPDFToJPEGOpen, setIsPDFToJPEGOpen] = useState<boolean>(false);
+  const [isPDFSignatureOpen, setIsPDFSignatureOpen] = useState<boolean>(false);
+  const [isPDFToWordOpen, setIsPDFToWordOpen] = useState<boolean>(false);
   const [isDocumentEditorOpen, setIsDocumentEditorOpen] = useState<boolean>(false);
   const [pendingHighlightFile, setPendingHighlightFile] = useState<File | null>(null);
   const [pendingJpegFile, setPendingJpegFile] = useState<File | null>(null);
@@ -280,6 +284,8 @@ export default function App() {
               onOpenPDFSplit={() => setIsPDFSplitOpen(true)}
               onOpenPDFHighlight={() => setIsPDFHighlightOpen(true)}
               onOpenPDFToJPEG={() => setIsPDFToJPEGOpen(true)}
+              onOpenPDFSignature={() => setIsPDFSignatureOpen(true)}
+              onOpenPDFToWord={() => setIsPDFToWordOpen(true)}
               onOpenDocumentEditor={() => setIsDocumentEditorOpen(true)}
               onOpenQRGenerator={() => setIsQRGeneratorOpen(true)}
               onOpenQRScanner={() => setIsQRScannerOpen(true)}
@@ -372,6 +378,26 @@ export default function App() {
         />
       )}
 
+      {/* PDF Signature Detection & Redaction Modal */}
+      {isPDFSignatureOpen && (
+        <PDFSignatureModal
+          onClose={() => setIsPDFSignatureOpen(false)}
+          onOpenHighlightWithFile={(file) => {
+            setPendingHighlightFile(file);
+            setIsPDFSignatureOpen(false);
+            setIsPDFHighlightOpen(true);
+          }}
+          onOpenToJPEGWithFile={(file) => {
+            setPendingJpegFile(file);
+            setIsPDFSignatureOpen(false);
+            setIsPDFToJPEGOpen(true);
+          }}
+          onSaveToDocuments={(newDoc) => {
+            setAllDocuments((prev) => [newDoc, ...prev.filter((d) => d.id !== newDoc.id)]);
+          }}
+        />
+      )}
+
       {/* Document Editor Modal (PDF / Word / Excel) */}
       {isDocumentEditorOpen && (
         <DocumentEditorModal
@@ -390,6 +416,15 @@ export default function App() {
             setIsDocumentEditorOpen(false);
             setIsPDFToJPEGOpen(true);
           }}
+        />
+      )}
+
+      {/* PDF to Word Modal (Online conversion servers with security warning) */}
+      {isPDFToWordOpen && (
+        <PDFToWordModal
+          isOpen={isPDFToWordOpen}
+          onClose={() => setIsPDFToWordOpen(false)}
+          onOpenSignatureModal={() => setIsPDFSignatureOpen(true)}
         />
       )}
 

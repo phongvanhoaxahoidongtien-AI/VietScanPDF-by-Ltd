@@ -17,6 +17,7 @@ import {
   ScanLine,
   FileImage,
   Edit3,
+  FileSignature,
 } from "lucide-react";
 import { ScanMode, ScannedDocument } from "../types";
 
@@ -27,6 +28,8 @@ interface HomeScreenProps {
   onOpenPDFSplit: () => void;
   onOpenPDFHighlight: () => void;
   onOpenPDFToJPEG: () => void;
+  onOpenPDFSignature: () => void;
+  onOpenPDFToWord: () => void;
   onOpenDocumentEditor: () => void;
   onOpenQRGenerator: () => void;
   onOpenQRScanner: () => void;
@@ -42,6 +45,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onOpenPDFSplit,
   onOpenPDFHighlight,
   onOpenPDFToJPEG,
+  onOpenPDFSignature,
+  onOpenPDFToWord,
   onOpenDocumentEditor,
   onOpenQRGenerator,
   onOpenQRScanner,
@@ -181,7 +186,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {/* Chỉnh sửa tài liệu (NEW) */}
+          {/* Chỉnh sửa tài liệu */}
           <button
             id="btn-tool-doc-editor"
             onClick={onOpenDocumentEditor}
@@ -196,7 +201,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                   Chỉnh sửa tài liệu
                 </h4>
                 <span className="px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-300 text-[10px] font-bold border border-blue-500/30">
-                  MỚI • PDF / Word / Excel
+                  PDF / Word / Excel
                 </span>
               </div>
               <p className="text-[11px] text-slate-400 mt-0.5">
@@ -267,6 +272,56 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               </p>
             </div>
             <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-cyan-400 group-hover:translate-x-0.5 transition shrink-0" />
+          </button>
+
+          {/* Nhận diện chữ ký số (Vị trí mới: Sau PDF to JPEG) */}
+          <button
+            id="btn-tool-signature-pdf"
+            onClick={onOpenPDFSignature}
+            className="sm:col-span-2 lg:col-span-3 flex items-center gap-3.5 p-4 rounded-2xl bg-gradient-to-r from-amber-950/40 via-slate-900 to-slate-900 hover:bg-slate-850 border border-amber-500/30 hover:border-amber-500/60 active:scale-[0.98] transition text-left group shadow-sm"
+          >
+            <div className="p-3 rounded-xl bg-amber-600/20 text-amber-400 border border-amber-500/30 group-hover:bg-amber-600 group-hover:text-white transition shrink-0">
+              <FileSignature className="w-5 h-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <h4 className="text-sm font-bold text-white group-hover:text-amber-400 transition">
+                  Nhận diện chữ ký số
+                </h4>
+                <span className="px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 text-[10px] font-bold border border-amber-500/30">
+                  Xóa field & Chữ ký số
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Tự động phát hiện Signature Field, xóa chữ ký số & vẽ vùng che nội dung sạch trang khi in
+              </p>
+            </div>
+            <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-amber-400 group-hover:translate-x-0.5 transition shrink-0" />
+          </button>
+
+          {/* PDF to Word (MỚI: Chuyển PDF sang Word bằng máy chủ trực tuyến) */}
+          <button
+            id="btn-tool-pdf-to-word"
+            onClick={onOpenPDFToWord}
+            className="sm:col-span-2 lg:col-span-3 flex items-center gap-3.5 p-4 rounded-2xl bg-gradient-to-r from-blue-950/40 via-slate-900 to-slate-900 hover:bg-slate-850 border border-blue-500/30 hover:border-blue-500/60 active:scale-[0.98] transition text-left group shadow-sm cursor-pointer"
+          >
+            <div className="p-3 rounded-xl bg-blue-600/20 text-blue-400 border border-blue-500/30 group-hover:bg-blue-600 group-hover:text-white transition shrink-0">
+              <FileText className="w-5 h-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <h4 className="text-sm font-bold text-white group-hover:text-blue-400 transition">
+                  PDF to Word
+                </h4>
+                <span className="px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-300 text-[10px] font-bold border border-blue-500/30">
+                  MỚI • 4 Server
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Chuyển PDF sang Word bằng máy chủ trực tuyến
+              </p>
+            </div>
+            <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-blue-400 group-hover:translate-x-0.5 transition shrink-0" />
           </button>
         </div>
       </div>
