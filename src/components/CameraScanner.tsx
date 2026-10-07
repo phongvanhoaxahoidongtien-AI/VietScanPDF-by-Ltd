@@ -89,7 +89,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
 
   // Single-Page Review State
   const [reviewPage, setReviewPage] = useState<ScannedPage | null>(null);
-  const [activeFilter, setActiveFilter] = useState<FilterMode>("document");
+  const [activeFilter, setActiveFilter] = useState<FilterMode>("original");
   const [rotationDeg, setRotationDeg] = useState<number>(0);
   const [isAdjustingCrop, setIsAdjustingCrop] = useState<boolean>(false);
 
@@ -280,35 +280,68 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
       let stream: MediaStream | null = null;
       let torchAvailable = false;
 
-      // Tier 1: Try exact environment (for real mobile back camera)
+      // Tier 1: Try exact environment with 4K UHD sensor resolution (ideal: 3840x2160)
       if (facing === "environment") {
         try {
           stream = await navigator.mediaDevices.getUserMedia({
             video: {
               facingMode: { exact: "environment" },
-              width: { ideal: 1920 },
-              height: { ideal: 1080 },
+              width: { ideal: 3840 },
+              height: { ideal: 2160 },
+              advanced: [
+                { focusMode: "continuous" },
+                { exposureMode: "continuous" },
+                { whiteBalanceMode: "continuous" },
+              ] as any,
             },
             audio: false,
           });
-        } catch (eExact) {
-          console.warn("Exact environment failed, falling back to ideal:", eExact);
+        } catch (eExact4k) {
+          console.warn("Exact environment 4K failed, trying 1080p:", eExact4k);
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: {
+                facingMode: { exact: "environment" },
+                width: { ideal: 1920 },
+                height: { ideal: 1080 },
+              },
+              audio: false,
+            });
+          } catch (eExact1080) {
+            console.warn("Exact environment 1080p failed:", eExact1080);
+          }
         }
       }
 
-      // Tier 2: Ideal facing mode
+      // Tier 2: Ideal facing mode with 4K UHD sensor resolution
       if (!stream) {
         try {
           stream = await navigator.mediaDevices.getUserMedia({
             video: {
               facingMode: { ideal: facing },
-              width: { ideal: 1920 },
-              height: { ideal: 1080 },
+              width: { ideal: 3840 },
+              height: { ideal: 2160 },
+              advanced: [
+                { focusMode: "continuous" },
+                { exposureMode: "continuous" },
+              ] as any,
             },
             audio: false,
           });
-        } catch (eIdeal) {
-          console.warn("Ideal facing failed, trying plain camera:", eIdeal);
+        } catch (eIdeal4k) {
+          console.warn("Ideal facing 4K failed, trying 1080p:", eIdeal4k);
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: {
+                facingMode: { ideal: facing },
+                width: { ideal: 1920 },
+                height: { ideal: 1080 },
+              },
+              audio: false,
+            });
+          } catch (eIdeal1080) {
+            console.warn("Ideal 1080p failed:", eIdeal1080);
+          }
         }
       }
 
@@ -318,6 +351,20 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           video: true,
           audio: false,
         });
+      }
+
+      // Tối ưu hóa tiêu cự và phơi sáng tự động liên tục trên camera
+      if (stream) {
+        try {
+          const vTrack = stream.getVideoTracks()[0];
+          if (vTrack && (vTrack as any).applyConstraints) {
+            await (vTrack as any).applyConstraints({
+              advanced: [{ focusMode: "continuous" }, { exposureMode: "continuous" }],
+            }).catch(() => {});
+          }
+        } catch {
+          // ignore
+        }
       }
 
       streamRef.current = stream;
@@ -401,28 +448,63 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     setFacingMode(nextFacing);
   };
 
-  // Perform High Resolution Guided Frame Crop from Video Feed
-  const captureGuidedFrame = useCallback(() => {
+  // Perform High Resolution Guided Frame Crop from Video Feed / Hardware ImageCapture
+  const captureGuidedFrame = useCallback(async (): Promise<ScannedPage | null> => {
     const video = videoRef.current;
     const container = containerRef.current;
     if (!video || !container || video.readyState < 2) return null;
 
-    const vw = video.videoWidth || 1920;
-    const vh = video.videoHeight || 1080;
+    let photoSource: CanvasImageSource = video;
+    let vw = video.videoWidth || 1920;
+    let vh = video.videoHeight || 1080;
+
+    // Ưu tiên sử dụng ImageCapture API phần cứng để chụp ảnh độ phân giải cảm biến tối đa (nếu thiết bị hỗ trợ)
+    const videoTrack = streamRef.current?.getVideoTracks()[0];
+    if (typeof window !== "undefined" && (window as any).ImageCapture && videoTrack && videoTrack.readyState === "live") {
+      try {
+        const imageCapture = new (window as any).ImageCapture(videoTrack);
+        const photoBlob = await imageCapture.takePhoto().catch(() => null);
+        if (photoBlob) {
+          if (typeof createImageBitmap !== "undefined") {
+            const bmp = await createImageBitmap(photoBlob);
+            photoSource = bmp;
+            vw = bmp.width;
+            vh = bmp.height;
+          } else {
+            const url = URL.createObjectURL(photoBlob);
+            const img = new Image();
+            await new Promise<void>((resolve, reject) => {
+              img.onload = () => resolve();
+              img.onerror = reject;
+              img.src = url;
+            });
+            URL.revokeObjectURL(url);
+            photoSource = img;
+            vw = img.naturalWidth;
+            vh = img.naturalHeight;
+          }
+        }
+      } catch (err) {
+        console.warn("Hardware ImageCapture fallback to live video frame:", err);
+      }
+    }
+
     const cw = container.clientWidth;
     const ch = container.clientHeight;
 
     if (cw === 0 || ch === 0 || guideRect.width === 0 || guideRect.height === 0) return null;
 
-    // 1. Draw raw video snapshot to high-resolution canvas
+    // 1. Draw raw high-resolution snapshot to canvas with high smoothing quality
     const rawCanvas = document.createElement("canvas");
     rawCanvas.width = vw;
     rawCanvas.height = vh;
     const rawCtx = rawCanvas.getContext("2d", { willReadFrequently: true });
     if (!rawCtx) return null;
 
-    rawCtx.drawImage(video, 0, 0, vw, vh);
-    const rawDataUrl = rawCanvas.toDataURL("image/jpeg", 0.95);
+    rawCtx.imageSmoothingEnabled = true;
+    rawCtx.imageSmoothingQuality = "high";
+    rawCtx.drawImage(photoSource, 0, 0, vw, vh);
+    const rawDataUrl = rawCanvas.toDataURL("image/jpeg", 0.96);
 
     // 2. Compute video coordinates under 'object-fit: cover'
     const videoAspect = vw / vh;
@@ -454,22 +536,24 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     const srcW = Math.max(20, Math.min(vw - srcX, guideRect.width * scale));
     const srcH = Math.max(20, Math.min(vh - srcY, guideRect.height * scale));
 
-    // 3. Crop guided area
+    // 3. Crop guided area with maximum quality
     const cropCanvas = document.createElement("canvas");
     cropCanvas.width = Math.round(srcW);
     cropCanvas.height = Math.round(srcH);
     const cropCtx = cropCanvas.getContext("2d", { willReadFrequently: true });
     if (!cropCtx) return null;
 
+    cropCtx.imageSmoothingEnabled = true;
+    cropCtx.imageSmoothingQuality = "high";
     cropCtx.drawImage(
       rawCanvas,
       srcX, srcY, srcW, srcH,
       0, 0, cropCanvas.width, cropCanvas.height
     );
 
-    // 4. Apply initial document enhancement filter
-    const enhancedCanvas = CVEngine.applyFilter(cropCanvas, "document", 0);
-    const processedDataUrl = enhancedCanvas.toDataURL("image/jpeg", 0.92);
+    // 4. Mặc định lấy ảnh gốc của máy ảnh (original) – bảo toàn 100% độ nét, dải màu và ánh sáng tự nhiên
+    const processedCanvas = CVEngine.applyFilter(cropCanvas, "original", 0);
+    const processedDataUrl = processedCanvas.toDataURL("image/jpeg", 0.95);
 
     const quad: QuadPoints = {
       topLeft: { x: srcX, y: srcY },
@@ -483,7 +567,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
       originalImage: rawDataUrl,
       processedImage: processedDataUrl,
       quad,
-      filter: "document",
+      filter: "original",
       rotation: 0,
       width: cropCanvas.width,
       height: cropCanvas.height,
@@ -494,7 +578,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
   }, [guideRect]);
 
   // Handle Capture Action
-  const handleCapture = () => {
+  const handleCapture = async () => {
     if (!isCameraReady || isStartingCamera) return;
 
     // Trigger visual flash & audio feedback
@@ -502,13 +586,13 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     playShutterSound();
     setTimeout(() => setIsFlashing(false), 200);
 
-    const page = captureGuidedFrame();
+    const page = await captureGuidedFrame();
     if (!page) return;
 
     if (captureMode === "single") {
-      // Chế độ A: Chụp từng trang -> Hiển thị màn hình Preview xem lại ngay
+      // Chế độ A: Chụp từng trang -> Hiển thị màn hình Preview xem lại ngay với ảnh gốc máy ảnh
       setReviewPage(page);
-      setActiveFilter("document");
+      setActiveFilter("original");
       setRotationDeg(0);
     } else {
       // Chế độ B: Chụp liên tục (Microsoft Lens style) -> Gom vào Stack góc trái
@@ -533,23 +617,23 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         const targetAspect = frameRatio === "card" ? "card" : "document";
         const defaultQuad = CVEngine.getDefaultQuad(img.naturalWidth, img.naturalHeight, targetAspect);
         const warpedCanvas = CVEngine.warpPerspective(img, defaultQuad);
-        const enhancedCanvas = CVEngine.applyFilter(warpedCanvas, "document", 0);
+        const originalCanvas = CVEngine.applyFilter(warpedCanvas, "original", 0);
 
         const page: ScannedPage = {
           id: `import_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
           originalImage: dataUrl,
-          processedImage: enhancedCanvas.toDataURL("image/jpeg", 0.92),
+          processedImage: originalCanvas.toDataURL("image/jpeg", 0.95),
           quad: defaultQuad,
-          filter: "document",
+          filter: "original",
           rotation: 0,
-          width: enhancedCanvas.width,
-          height: enhancedCanvas.height,
+          width: originalCanvas.width,
+          height: originalCanvas.height,
           createdAt: Date.now(),
         };
 
         if (captureMode === "single") {
           setReviewPage(page);
-          setActiveFilter("document");
+          setActiveFilter("original");
           setRotationDeg(0);
         } else {
           setBatchPages((prev) => [...prev, page]);
@@ -577,7 +661,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         ...reviewPage,
         filter: newFilter,
         rotation: newRotation,
-        processedImage: filteredCanvas.toDataURL("image/jpeg", 0.92),
+        processedImage: filteredCanvas.toDataURL("image/jpeg", 0.95),
       });
     };
     img.src = reviewPage.originalImage;
@@ -592,7 +676,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
       quad: adjustedQuad,
       width: filteredCanvas.width,
       height: filteredCanvas.height,
-      processedImage: filteredCanvas.toDataURL("image/jpeg", 0.92),
+      processedImage: filteredCanvas.toDataURL("image/jpeg", 0.95),
     });
     setIsAdjustingCrop(false);
   };
@@ -1054,57 +1138,76 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           {/* Quick Filters & Rotation Controls */}
           <div className="px-4 py-3 bg-slate-900/90 border-t border-slate-800 flex flex-col gap-3">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-slate-400">Bộ lọc màu:</span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs font-medium text-slate-400">Bộ lọc màu:</span>
+                {activeFilter === "original" ? (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/30">
+                    Ảnh gốc máy ảnh • Nét tự nhiên
+                  </span>
+                ) : (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 font-semibold border border-blue-500/30">
+                    Đã áp dụng bộ lọc tùy chọn
+                  </span>
+                )}
+              </div>
               <button
                 onClick={() => updateReviewFilterAndRotation(activeFilter, (rotationDeg + 90) % 360)}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium transition-colors"
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-750 text-slate-200 text-xs font-medium transition-colors"
               >
                 <RotateCw className="w-3.5 h-3.5" />
                 Xoay 90°
               </button>
             </div>
 
-            {/* Filter Pills */}
+            {/* Filter Pills: Ảnh gốc (Mặc định) đứng đầu, sau đó mới là Văn bản, Trắng đen, Màu sắc */}
             <div className="grid grid-cols-4 gap-2">
               <button
+                id="btn-filter-original"
+                onClick={() => updateReviewFilterAndRotation("original", rotationDeg)}
+                className={`py-2 px-1 rounded-xl text-xs font-medium transition-all text-center flex flex-col items-center justify-center gap-0.5 ${
+                  activeFilter === "original"
+                    ? "bg-emerald-600 text-white font-semibold shadow-lg shadow-emerald-600/30 ring-1 ring-emerald-400"
+                    : "bg-slate-800 text-slate-300 hover:text-white"
+                }`}
+              >
+                <span>Ảnh gốc</span>
+                <span className="text-[9px] opacity-80">(Mặc định)</span>
+              </button>
+              <button
+                id="btn-filter-document"
                 onClick={() => updateReviewFilterAndRotation("document", rotationDeg)}
-                className={`py-2 px-1 rounded-xl text-xs font-medium transition-all text-center ${
+                className={`py-2 px-1 rounded-xl text-xs font-medium transition-all text-center flex flex-col items-center justify-center gap-0.5 ${
                   activeFilter === "document"
                     ? "bg-blue-600 text-white font-semibold shadow-lg shadow-blue-600/30"
                     : "bg-slate-800 text-slate-400 hover:text-white"
                 }`}
               >
-                Văn bản
+                <span>Văn bản</span>
+                <span className="text-[9px] opacity-80">Trắng nền</span>
               </button>
               <button
+                id="btn-filter-bw"
                 onClick={() => updateReviewFilterAndRotation("bw", rotationDeg)}
-                className={`py-2 px-1 rounded-xl text-xs font-medium transition-all text-center ${
+                className={`py-2 px-1 rounded-xl text-xs font-medium transition-all text-center flex flex-col items-center justify-center gap-0.5 ${
                   activeFilter === "bw"
                     ? "bg-blue-600 text-white font-semibold shadow-lg shadow-blue-600/30"
                     : "bg-slate-800 text-slate-400 hover:text-white"
                 }`}
               >
-                Trắng đen
+                <span>Trắng đen</span>
+                <span className="text-[9px] opacity-80">Đơn sắc</span>
               </button>
               <button
+                id="btn-filter-magic"
                 onClick={() => updateReviewFilterAndRotation("magic", rotationDeg)}
-                className={`py-2 px-1 rounded-xl text-xs font-medium transition-all text-center ${
+                className={`py-2 px-1 rounded-xl text-xs font-medium transition-all text-center flex flex-col items-center justify-center gap-0.5 ${
                   activeFilter === "magic"
                     ? "bg-blue-600 text-white font-semibold shadow-lg shadow-blue-600/30"
                     : "bg-slate-800 text-slate-400 hover:text-white"
                 }`}
               >
-                Màu sắc
-              </button>
-              <button
-                onClick={() => updateReviewFilterAndRotation("original", rotationDeg)}
-                className={`py-2 px-1 rounded-xl text-xs font-medium transition-all text-center ${
-                  activeFilter === "original"
-                    ? "bg-blue-600 text-white font-semibold shadow-lg shadow-blue-600/30"
-                    : "bg-slate-800 text-slate-400 hover:text-white"
-                }`}
-              >
-                Ảnh gốc
+                <span>Màu sắc</span>
+                <span className="text-[9px] opacity-80">Tươi sáng</span>
               </button>
             </div>
 

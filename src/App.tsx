@@ -196,8 +196,8 @@ export default function App() {
           }
 
           const warped = CVEngine.warpPerspective(img, selectedQuad);
-          const processedCanvas = CVEngine.applyFilter(warped, "document", 0);
-          const processedUrl = processedCanvas.toDataURL("image/jpeg", 0.92);
+          const processedCanvas = CVEngine.applyFilter(warped, "original", 0);
+          const processedUrl = processedCanvas.toDataURL("image/jpeg", 0.95);
           const pHash = CVEngine.computePerceptualHashFromCanvas(warped);
 
           newPages.push({
@@ -205,7 +205,7 @@ export default function App() {
             originalImage: dataUrl,
             processedImage: processedUrl,
             quad: selectedQuad,
-            filter: "document",
+            filter: "original",
             rotation: 0,
             createdAt: Date.now(),
             width: processedCanvas.width,

@@ -24,22 +24,44 @@ export class CameraHelper {
     let stream: MediaStream | null = null;
     let facingModeUsed: "environment" | "user" | "unknown" = "unknown";
 
-    // Tier 1: Ideal 1080p with preferred facing mode (no hard min limits to avoid OverconstrainedError)
+    // Tier 1: Ideal 4K / UHD (3840x2160) for maximum camera sensor resolution
     try {
       stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { ideal: preferredFacing },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
+          width: { ideal: 3840 },
+          height: { ideal: 2160 },
+          advanced: [
+            { focusMode: "continuous" },
+            { exposureMode: "continuous" },
+            { whiteBalanceMode: "continuous" },
+          ] as any,
         },
         audio: false,
       });
       facingModeUsed = preferredFacing;
-    } catch (e1: any) {
-      console.warn(`Camera Tier 1 (${preferredFacing} 1080p) failed:`, e1?.message || e1);
+    } catch (e0: any) {
+      console.warn(`Camera Tier 1 (${preferredFacing} 4K UHD) failed, trying 1080p:`, e0?.message || e0);
     }
 
-    // Tier 2: Standard resolution with preferred facing mode
+    // Tier 2: Ideal 1080p with preferred facing mode
+    if (!stream) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: preferredFacing },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
+          audio: false,
+        });
+        facingModeUsed = preferredFacing;
+      } catch (e1: any) {
+        console.warn(`Camera Tier 2 (${preferredFacing} 1080p) failed:`, e1?.message || e1);
+      }
+    }
+
+    // Tier 3: Standard resolution with preferred facing mode
     if (!stream) {
       try {
         stream = await navigator.mediaDevices.getUserMedia({
@@ -50,11 +72,11 @@ export class CameraHelper {
         });
         facingModeUsed = preferredFacing;
       } catch (e2: any) {
-        console.warn(`Camera Tier 2 (${preferredFacing} relaxed) failed:`, e2?.message || e2);
+        console.warn(`Camera Tier 3 (${preferredFacing} relaxed) failed:`, e2?.message || e2);
       }
     }
 
-    // Tier 3: Alternate facing mode (e.g. front camera if desktop/laptop has no back camera)
+    // Tier 4: Alternate facing mode (e.g. front camera if desktop/laptop has no back camera)
     if (!stream) {
       try {
         stream = await navigator.mediaDevices.getUserMedia({
@@ -65,11 +87,11 @@ export class CameraHelper {
         });
         facingModeUsed = fallbackFacing;
       } catch (e3: any) {
-        console.warn(`Camera Tier 3 (${fallbackFacing}) failed:`, e3?.message || e3);
+        console.warn(`Camera Tier 4 (${fallbackFacing}) failed:`, e3?.message || e3);
       }
     }
 
-    // Tier 4: Plain generic video device (any camera available)
+    // Tier 5: Plain generic video device (any camera available)
     if (!stream) {
       try {
         stream = await navigator.mediaDevices.getUserMedia({

@@ -15,7 +15,7 @@ export interface UserSettings {
 
 export const DEFAULT_SETTINGS: UserSettings = {
   autoCaptureEnabled: true,
-  defaultFilter: "document",
+  defaultFilter: "original",
   cameraResolution: "high",
   ocrLanguage: "vie",
   hapticFeedback: true,

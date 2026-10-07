@@ -10,7 +10,15 @@ import {
   CheckCircle,
   HelpCircle,
   Share2,
+  Copy,
+  Check,
+  X,
+  QrCode,
+  ExternalLink,
+  Mail,
+  Send,
 } from "lucide-react";
+import QRCode from "qrcode";
 import { StorageService, UserSettings } from "../utils/storage";
 
 interface SettingsModalProps {
@@ -26,6 +34,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onClearAl
   });
   const [clearing, setClearing] = useState(false);
 
+  // Share App State
+  const [showShareModal, setShowShareModal] = useState<boolean>(false);
+  const [shareQrUrl, setShareQrUrl] = useState<string>("");
+  const [copiedLink, setCopiedLink] = useState<boolean>(false);
+
+  const appUrl = typeof window !== "undefined" ? window.location.href : "https://vietscan.app";
+  const shareTitle = "VietScan PDF by Ltd";
+  const shareText =
+    "VietScan PDF by Ltd – Ứng dụng quét tài liệu A4, CCCD, GPLX chuẩn, nhận diện chữ ký số & xử lý PDF bảo mật 100% trên thiết bị.";
+
   useEffect(() => {
     const load = async () => {
       const s = await StorageService.getSettings();
@@ -35,6 +53,62 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onClearAl
     };
     load();
   }, []);
+
+  // Generate QR Code for sharing
+  const generateShareQr = async () => {
+    try {
+      const url = await QRCode.toDataURL(appUrl, {
+        width: 280,
+        margin: 2,
+        color: {
+          dark: "#0f172a",
+          light: "#ffffff",
+        },
+      });
+      setShareQrUrl(url);
+    } catch (e) {
+      console.warn("Could not generate share QR:", e);
+    }
+  };
+
+  // Trigger Native Web Share or Open Share Dialog
+  const handleOpenShare = async () => {
+    generateShareQr();
+
+    if (typeof navigator !== "undefined" && navigator.share) {
+      try {
+        await navigator.share({
+          title: shareTitle,
+          text: shareText,
+          url: appUrl,
+        });
+        return;
+      } catch (err: any) {
+        if (err?.name === "AbortError") {
+          return;
+        }
+      }
+    }
+
+    setShowShareModal(true);
+  };
+
+  const handleCopyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(appUrl);
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2500);
+    } catch {
+      const textArea = document.createElement("textarea");
+      textArea.value = appUrl;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textArea);
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2500);
+    }
+  };
 
   const handleToggleAutoCapture = async () => {
     if (!settings) return;
@@ -69,11 +143,43 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onClearAl
 
         <h2 className="text-sm font-bold text-white tracking-wide">Cài đặt & Thông tin</h2>
 
-        <div className="w-16" />
+        {/* Nút Chia sẻ ứng dụng ở góc phải phần cài đặt */}
+        <button
+          id="btn-settings-share-app"
+          onClick={handleOpenShare}
+          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 active:scale-95 text-white font-semibold text-xs sm:text-sm shadow-md shadow-blue-600/30 transition min-h-[44px] cursor-pointer"
+          title="Chia sẻ ứng dụng VietScan PDF"
+        >
+          <Share2 className="w-4 h-4" />
+          <span>Chia sẻ</span>
+        </button>
       </div>
 
       {/* Settings Body */}
       <div className="flex-1 overflow-y-auto p-4 max-w-2xl w-full mx-auto flex flex-col gap-5 pb-32">
+        {/* Share App Quick Card */}
+        <div className="bg-gradient-to-r from-blue-950/50 via-indigo-950/40 to-slate-900 border border-blue-500/30 rounded-2xl p-4 flex items-center justify-between gap-3 shadow-md">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-blue-600/20 text-blue-400 border border-blue-500/30 shrink-0">
+              <Share2 className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-white">Chia sẻ VietScan PDF</h3>
+              <p className="text-xs text-slate-300">Giới thiệu ứng dụng hoặc chia sẻ qua mã QR</p>
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              generateShareQr();
+              setShowShareModal(true);
+            }}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-sm active:scale-95 transition shrink-0"
+          >
+            <QrCode className="w-4 h-4" />
+            <span>Mã QR & Link</span>
+          </button>
+        </div>
+
         {/* Privacy Highlight Card */}
         <div className="bg-gradient-to-r from-blue-950/40 to-indigo-950/40 border border-blue-800/40 rounded-2xl p-4 flex items-start gap-3.5">
           <div className="p-2.5 rounded-xl bg-blue-600/20 text-blue-400 shrink-0">
@@ -110,11 +216,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onClearAl
 
           <div className="flex items-center justify-between py-2 pt-3">
             <div>
-              <p className="text-sm font-semibold text-white">Chế độ lọc mặc định</p>
-              <p className="text-xs text-slate-400">Tự động làm trắng nền và tăng độ tương phản văn bản</p>
+              <p className="text-sm font-semibold text-white">Chế độ lọc màu mặc định</p>
+              <p className="text-xs text-slate-400">Ưu tiên ảnh gốc máy ảnh, bảo toàn độ nét & dải màu tự nhiên</p>
             </div>
-            <span className="text-xs font-semibold px-2.5 py-1 rounded bg-slate-800 text-blue-400">
-              Văn bản Scan
+            <span className="text-xs font-semibold px-2.5 py-1 rounded bg-slate-800 text-emerald-400 border border-emerald-500/20">
+              Ảnh gốc (Máy ảnh)
             </span>
           </div>
         </div>
@@ -183,6 +289,108 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onClearAl
           </p>
         </div>
       </div>
+
+      {/* SHARE APP MODAL */}
+      {showShareModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl flex flex-col gap-5 text-white animate-in fade-in zoom-in-95 duration-150">
+            {/* Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-blue-600/20 text-blue-400 border border-blue-500/30">
+                  <Share2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Chia sẻ ứng dụng</h3>
+                  <p className="text-xs text-slate-400">VietScan PDF by Ltd</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowShareModal(false)}
+                className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* QR Code Section */}
+            <div className="flex flex-col items-center justify-center p-4 bg-slate-950/80 rounded-2xl border border-slate-800/80">
+              {shareQrUrl ? (
+                <div className="p-3 bg-white rounded-2xl shadow-lg mb-3">
+                  <img src={shareQrUrl} alt="VietScan QR Code" className="w-48 h-48 object-contain" />
+                </div>
+              ) : (
+                <div className="w-48 h-48 bg-slate-800 animate-pulse rounded-2xl mb-3" />
+              )}
+              <p className="text-xs text-slate-300 font-medium text-center">
+                Quét mã QR bằng Camera điện thoại để mở & cài đặt ngay
+              </p>
+            </div>
+
+            {/* Link Copy Box */}
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-semibold text-slate-400">Liên kết ứng dụng:</span>
+              <div className="flex items-center gap-2 p-1.5 pl-3 bg-slate-950 rounded-xl border border-slate-800">
+                <span className="text-xs text-slate-300 truncate flex-1 font-mono">
+                  {appUrl}
+                </span>
+                <button
+                  id="btn-copy-share-link"
+                  onClick={handleCopyLink}
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition active:scale-95 shrink-0 ${
+                    copiedLink
+                      ? "bg-emerald-600 text-white"
+                      : "bg-blue-600 hover:bg-blue-500 text-white"
+                  }`}
+                >
+                  {copiedLink ? (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Đã chép!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>Sao chép</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Fast Channels */}
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              <a
+                href={`https://zalo.me/share?url=${encodeURIComponent(appUrl)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-blue-700/20 hover:bg-blue-700/30 text-blue-300 border border-blue-600/30 text-xs font-semibold active:scale-95 transition"
+              >
+                <Send className="w-4 h-4 text-blue-400" />
+                <span>Gửi qua Zalo</span>
+              </a>
+
+              <a
+                href={`mailto:?subject=${encodeURIComponent(shareTitle)}&body=${encodeURIComponent(
+                  shareText + "\n\nTruy cập ngay: " + appUrl
+                )}`}
+                className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 text-xs font-semibold active:scale-95 transition"
+              >
+                <Mail className="w-4 h-4 text-slate-300" />
+                <span>Gửi qua Email</span>
+              </a>
+            </div>
+
+            {/* Close */}
+            <button
+              onClick={() => setShowShareModal(false)}
+              className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition mt-1"
+            >
+              Đóng
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
