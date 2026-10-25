@@ -48,6 +48,7 @@ export default function App() {
   const [isDocumentEditorOpen, setIsDocumentEditorOpen] = useState<boolean>(false);
   const [pendingHighlightFile, setPendingHighlightFile] = useState<File | null>(null);
   const [pendingJpegFile, setPendingJpegFile] = useState<File | null>(null);
+  const [pendingWordFile, setPendingWordFile] = useState<File | null>(null);
 
   // QR Code Modals
   const [isQRGeneratorOpen, setIsQRGeneratorOpen] = useState<boolean>(false);
@@ -392,6 +393,11 @@ export default function App() {
             setIsPDFSignatureOpen(false);
             setIsPDFToJPEGOpen(true);
           }}
+          onOpenPDFToWordWithFile={(file) => {
+            setPendingWordFile(file);
+            setIsPDFSignatureOpen(false);
+            setIsPDFToWordOpen(true);
+          }}
           onSaveToDocuments={(newDoc) => {
             setAllDocuments((prev) => [newDoc, ...prev.filter((d) => d.id !== newDoc.id)]);
           }}
@@ -423,7 +429,11 @@ export default function App() {
       {isPDFToWordOpen && (
         <PDFToWordModal
           isOpen={isPDFToWordOpen}
-          onClose={() => setIsPDFToWordOpen(false)}
+          initialFile={pendingWordFile}
+          onClose={() => {
+            setIsPDFToWordOpen(false);
+            setPendingWordFile(null);
+          }}
           onOpenSignatureModal={() => setIsPDFSignatureOpen(true)}
         />
       )}

@@ -28,6 +28,8 @@ import {
   Crosshair,
   Layers,
   ExternalLink,
+  FileText,
+  Edit2,
 } from "lucide-react";
 import {
   PDFSignatureEngine,
@@ -43,6 +45,7 @@ interface PDFSignatureModalProps {
   onClose: () => void;
   onOpenHighlightWithFile?: (file: File) => void;
   onOpenToJPEGWithFile?: (file: File) => void;
+  onOpenPDFToWordWithFile?: (file: File) => void;
   onSaveToDocuments?: (doc: ScannedDocument) => void;
 }
 
@@ -56,6 +59,7 @@ export const PDFSignatureModal: React.FC<PDFSignatureModalProps> = ({
   onClose,
   onOpenHighlightWithFile,
   onOpenToJPEGWithFile,
+  onOpenPDFToWordWithFile,
   onSaveToDocuments,
 }) => {
   // File & Detection State
@@ -116,6 +120,8 @@ export const PDFSignatureModal: React.FC<PDFSignatureModalProps> = ({
   const [processedBlob, setProcessedBlob] = useState<Blob | null>(null);
   const [processedUrl, setProcessedUrl] = useState<string | null>(null);
   const [processedFileName, setProcessedFileName] = useState<string>("");
+  const [showExportDialog, setShowExportDialog] = useState<boolean>(false);
+  const [exportFileNameInput, setExportFileNameInput] = useState<string>("");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [showDisclaimer, setShowDisclaimer] = useState<boolean>(false);
 
@@ -1103,38 +1109,61 @@ export const PDFSignatureModal: React.FC<PDFSignatureModalProps> = ({
     }
   };
 
-  // XUẤT PDF: Generates file with strict naming convention VietScan_by_Ltd_dd_mm_yy_hh_mm_ss.pdf
-  const handleExportPDF = async () => {
+  // XUẤT PDF: Hỗ trợ người dùng xem, sửa tên và tùy chọn đặt tên tệp trước khi tải xuống
+  const getCleanPDFFileName = (name: string): string => {
+    let clean = name.trim();
+    if (!clean) clean = generateDocumentFileName({ extension: "pdf" });
+    if (!clean.toLowerCase().endsWith(".pdf")) {
+      clean += ".pdf";
+    }
+    return clean;
+  };
+
+  const prepareExportDialog = () => {
+    if (!file && !fileBuffer) return;
+    const defaultName = generateDocumentFileName({ extension: "pdf" });
+    setExportFileNameInput(defaultName);
+    setShowExportDialog(true);
+  };
+
+  const handleExportPDF = () => {
+    prepareExportDialog();
+  };
+
+  const executeExportPDF = async (chosenName?: string) => {
     if (!file && !fileBuffer) return;
     setIsProcessing(true);
+    setShowExportDialog(false);
 
     try {
       const result = await generateProcessedPDF();
       if (!result?.blob) throw new Error("Không tạo được dữ liệu PDF");
 
+      const finalFilename = getCleanPDFFileName(
+        chosenName || exportFileNameInput || generateDocumentFileName({ extension: "pdf" })
+      );
       const url = URL.createObjectURL(result.blob);
-      const filename = generateDocumentFileName({ extension: "pdf" });
 
       setProcessedBlob(result.blob);
       setProcessedUrl(url);
-      setProcessedFileName(filename);
+      setProcessedFileName(finalFilename);
 
-      // Auto trigger download
+      // Auto trigger download with user's customized name
       const a = document.createElement("a");
       a.href = url;
-      a.download = filename;
+      a.download = finalFilename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
 
-      showToast(`Đã xuất và tải về: ${filename}`);
+      showToast(`Đã xuất và tải về: ${finalFilename}`);
 
       // Save to document history
       if (onSaveToDocuments && detectionResult?.pagePreviews && detectionResult.pagePreviews[0]?.dataUrl) {
         const previews = detectionResult.pagePreviews;
         const docRecord: ScannedDocument = {
           id: `doc_sig_${Date.now()}`,
-          title: filename.replace(".pdf", ""),
+          title: finalFilename.replace(".pdf", ""),
           category: "document",
           pages: previews.map((p, idx) => ({
             id: `p_${idx}`,
@@ -1155,6 +1184,51 @@ export const PDFSignatureModal: React.FC<PDFSignatureModalProps> = ({
     } catch (err: any) {
       console.error("Lỗi xuất PDF:", err);
       showToast("Lỗi khi xử lý và xuất tệp PDF.");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // CHUYỂN SANG PDF TO WORD: Lưu tạm tệp đã tách dấu/chữ ký và chuyển thẳng sang PDF to Word trực tuyến (không cần tải file xuống)
+  const handleForwardToPDFToWord = async () => {
+    if (!onOpenPDFToWordWithFile) return;
+    if (!file && !fileBuffer && !processedBlob) {
+      showToast("Vui lòng nạp tệp PDF trước.");
+      return;
+    }
+
+    setIsProcessing(true);
+    showToast("Đang lưu tạm tệp sạch dấu & chữ ký số...");
+
+    try {
+      let targetBlob = processedBlob;
+      let targetName = processedFileName;
+
+      // Nếu chưa xuất PDF trước đó, tự động tạo PDF đã tách dấu/chữ ký trong bộ nhớ
+      if (!targetBlob) {
+        const result = await generateProcessedPDF();
+        if (!result?.blob) throw new Error("Không tạo được tệp PDF đã xử lý");
+        targetBlob = result.blob;
+        targetName = generateDocumentFileName({ extension: "pdf" });
+        setProcessedBlob(targetBlob);
+        setProcessedFileName(targetName);
+      }
+
+      if (!targetName) {
+        targetName = generateDocumentFileName({ extension: "pdf" });
+      }
+
+      const tempExportFile = new File([targetBlob], targetName, {
+        type: "application/pdf",
+      });
+
+      showToast("Đã lưu tạm tệp! Đang chuyển sang PDF to Word...");
+      setTimeout(() => {
+        onOpenPDFToWordWithFile(tempExportFile);
+      }, 150);
+    } catch (err: any) {
+      console.error("Lỗi chuyển sang PDF to Word:", err);
+      showToast("Không thể chuẩn bị tệp để chuyển sang Word. Vui lòng thử lại.");
     } finally {
       setIsProcessing(false);
     }
@@ -1257,6 +1331,21 @@ export const PDFSignatureModal: React.FC<PDFSignatureModalProps> = ({
                 <span>{isDirectPrinting ? "Đang in..." : "In ngay"}</span>
               </button>
 
+              {/* CHUYỂN SANG PDF TO WORD: Lưu tạm file và chuyển sang Word trực tuyến, không cần tải xuống */}
+              {onOpenPDFToWordWithFile && (
+                <button
+                  id="btn-forward-to-pdf-to-word"
+                  onClick={handleForwardToPDFToWord}
+                  disabled={isProcessing || isDirectPrinting}
+                  className="flex items-center gap-1.5 px-3 sm:px-3.5 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 active:scale-95 text-white text-xs sm:text-sm font-bold shadow-lg shadow-indigo-950/40 transition disabled:opacity-50 cursor-pointer"
+                  title="Lưu tạm tệp sạch và chuyển sang PDF to Word trực tuyến (không cần tải file xuống máy)"
+                >
+                  <FileText className="w-4 h-4 text-blue-200" />
+                  <span className="hidden lg:inline">Chuyển sang PDF to Word</span>
+                  <span className="lg:hidden">PDF to Word</span>
+                </button>
+              )}
+
               {/* XUẤT PDF: Strict filename format */}
               <button
                 id="btn-export-pdf"
@@ -1304,11 +1393,37 @@ export const PDFSignatureModal: React.FC<PDFSignatureModalProps> = ({
                     <span>Xóa tất cả chữ ký</span>
                   </button>
                 )}
+
+                {/* Chuyển sang PDF to Word trực tiếp từ ribbon */}
+                {onOpenPDFToWordWithFile && (
+                  <button
+                    onClick={handleForwardToPDFToWord}
+                    disabled={isProcessing}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-600/30 hover:bg-indigo-600 active:scale-95 text-indigo-200 hover:text-white border border-indigo-500/40 font-bold transition cursor-pointer"
+                    title="Lưu tạm tệp đã tách dấu/chữ ký và chuyển sang PDF to Word luôn"
+                  >
+                    <FileText className="w-3.5 h-3.5 text-indigo-300" />
+                    <span>Chuyển sang PDF to Word</span>
+                  </button>
+                )}
               </>
             ) : (
-              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800 text-slate-400">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Không có Signature Field. Dùng Cục tẩy để xóa dấu hoặc chữ ký vẽ tay.</span>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800 text-slate-400">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Không có Signature Field. Dùng Cục tẩy để xóa dấu hoặc chữ ký vẽ tay.</span>
+                </div>
+                {onOpenPDFToWordWithFile && (
+                  <button
+                    onClick={handleForwardToPDFToWord}
+                    disabled={isProcessing}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-600/30 hover:bg-indigo-600 active:scale-95 text-indigo-200 hover:text-white border border-indigo-500/40 font-bold transition cursor-pointer"
+                    title="Lưu tạm tệp và chuyển sang PDF to Word luôn"
+                  >
+                    <FileText className="w-3.5 h-3.5 text-indigo-300" />
+                    <span>Chuyển sang PDF to Word</span>
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -1485,12 +1600,27 @@ export const PDFSignatureModal: React.FC<PDFSignatureModalProps> = ({
                             Trang {pIdx + 1} / {detectionResult?.totalPages || detectionResult?.pagePreviews?.length || 1}
                           </span>
                           {pageSigs.length > 0 && (
-                            <span className="text-[11px] text-amber-400/90 font-medium flex items-center gap-1">
-                              <FileSignature className="w-3 h-3" />
-                              {pageSigs.filter((s) => !s.isErased).length > 0
-                                ? `${pageSigs.filter((s) => !s.isErased).length} chữ ký`
-                                : "Đã gỡ chữ ký"}
-                            </span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[11px] text-amber-400/90 font-medium flex items-center gap-1">
+                                <FileSignature className="w-3 h-3" />
+                                {pageSigs.filter((s) => !s.isErased).length > 0
+                                  ? `${pageSigs.filter((s) => !s.isErased).length} chữ ký`
+                                  : "Đã tách sạch chữ ký số"}
+                              </span>
+                              {pageSigs.some((s) => s.isErased) && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    pageSigs.filter((s) => s.isErased).forEach((s) => handleRestoreSignature(s.id));
+                                  }}
+                                  className="text-[10px] text-slate-400 hover:text-amber-300 flex items-center gap-1 ml-1 hover:underline cursor-pointer"
+                                  title="Khôi phục chữ ký đã tách trên trang này"
+                                >
+                                  <RotateCcw className="w-2.5 h-2.5" />
+                                  <span>Khôi phục</span>
+                                </button>
+                              )}
+                            </div>
                           )}
                         </div>
 
@@ -1538,36 +1668,9 @@ export const PDFSignatureModal: React.FC<PDFSignatureModalProps> = ({
                           if (!sig.normalizedRect) return null;
                           const { x, y, w, h } = sig.normalizedRect;
 
+                          // Khi chữ ký số đã được tách (xóa) thì biến mất hoàn toàn, không hiển thị bất kỳ khung hay nhãn nào ở preview nữa
                           if (sig.isErased) {
-                            return (
-                              <div
-                                key={`erased_${sig.id}`}
-                                className="absolute bg-emerald-500/5 hover:bg-emerald-500/10 border border-dashed border-emerald-500/70 hover:border-emerald-400 rounded transition-all duration-150 group z-20"
-                                style={{
-                                  left: `${x * 100}%`,
-                                  top: `${y * 100}%`,
-                                  width: `${w * 100}%`,
-                                  height: `${h * 100}%`,
-                                }}
-                                title={`Chữ ký đã tách: ${sig.name} (Tài liệu & chữ ký khác giữ nguyên)`}
-                              >
-                                <div className="absolute -top-6 left-0 bg-emerald-700/95 text-white font-medium px-2 py-0.5 rounded text-[10px] whitespace-nowrap shadow-md flex items-center gap-1.5 backdrop-blur-sm z-30 pointer-events-auto">
-                                  <CheckCircle2 className="w-3 h-3 text-emerald-300" />
-                                  <span>Đã tách: {sig.name}</span>
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleRestoreSignature(sig.id);
-                                    }}
-                                    className="ml-1 text-[9px] bg-slate-900/90 hover:bg-slate-950 text-amber-300 px-1.5 py-0.5 rounded font-bold flex items-center gap-0.5 transition cursor-pointer"
-                                    title="Khôi phục chữ ký này"
-                                  >
-                                    <RotateCcw className="w-2.5 h-2.5" />
-                                    <span>Khôi phục</span>
-                                  </button>
-                                </div>
-                              </div>
-                            );
+                            return null;
                           }
 
                           // Active signature box with 4 smart corner anchors
@@ -1699,8 +1802,9 @@ export const PDFSignatureModal: React.FC<PDFSignatureModalProps> = ({
                         {pageBoxes.map((box) => {
                           const isSelected = box.id === selectedBoxId;
                           const isSigEraser = box.id.startsWith("erase_sig_");
-                          const sigId = isSigEraser ? box.id.replace("erase_sig_", "") : null;
-                          const sigObj = sigId ? detectedSignatures.find((s) => s.id === sigId) : null;
+                          if (isSigEraser) return null; // Không hiển thị vùng chữ ký số đã tách ở preview
+                          const sigId = null;
+                          const sigObj = null;
 
                           return (
                             <div
@@ -2063,9 +2167,23 @@ export const PDFSignatureModal: React.FC<PDFSignatureModalProps> = ({
                 </div>
                 <div>
                   <h3 className="font-bold text-white text-sm">Xuất PDF thành công!</h3>
-                  <p className="text-[11px] text-slate-400 font-mono truncate max-w-[240px]">
-                    {processedFileName}
-                  </p>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <p className="text-[11px] text-slate-300 font-mono truncate max-w-[190px]">
+                      {processedFileName}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setExportFileNameInput(processedFileName);
+                        setShowExportDialog(true);
+                      }}
+                      className="px-1.5 py-0.5 rounded bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 text-[10px] font-semibold border border-blue-500/30 flex items-center gap-1 cursor-pointer"
+                      title="Sửa tên và tải lại tệp"
+                    >
+                      <Edit2 className="w-2.5 h-2.5" />
+                      <span>Sửa tên</span>
+                    </button>
+                  </div>
                 </div>
               </div>
               <button
@@ -2117,6 +2235,18 @@ export const PDFSignatureModal: React.FC<PDFSignatureModalProps> = ({
                 >
                   <FileImage className="w-4 h-4 text-cyan-400" />
                   <span>Chuyển sang PDF to JPEG</span>
+                </button>
+              )}
+
+              {/* Forward to PDF to Word */}
+              {onOpenPDFToWordWithFile && (
+                <button
+                  id="btn-modal-success-forward-word"
+                  onClick={handleForwardToPDFToWord}
+                  className="w-full flex items-center justify-center gap-2 p-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold transition shadow-md shadow-blue-950/40 cursor-pointer"
+                >
+                  <FileText className="w-4 h-4 text-blue-200" />
+                  <span>Chuyển sang PDF to Word (Đã lưu tạm tệp)</span>
                 </button>
               )}
             </div>
@@ -2200,19 +2330,28 @@ export const PDFSignatureModal: React.FC<PDFSignatureModalProps> = ({
                 <span>Mở bản PDF trong Tab mới để in (Ctrl + P / Máy in rời)</span>
               </button>
 
+              {onOpenPDFToWordWithFile && (
+                <button
+                  onClick={handleForwardToPDFToWord}
+                  className="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-semibold text-xs shadow-md shadow-indigo-950/30 flex items-center justify-center gap-2 transition cursor-pointer"
+                >
+                  <FileText className="w-4 h-4 text-indigo-200" />
+                  <span>Chuyển sang PDF to Word với bản sạch này</span>
+                </button>
+              )}
+
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => {
-                    if (directPrintBlob) {
-                      const url = URL.createObjectURL(directPrintBlob);
-                      const a = document.createElement("a");
-                      a.href = url;
-                      a.download = generateDocumentFileName({ extension: "pdf" });
-                      a.click();
-                      showToast("Đã tải tệp PDF sạch về máy.");
-                    }
+                    setExportFileNameInput(
+                      file?.name
+                        ? file.name.replace(/\.pdf$/i, "") + "_sach_chu_ky.pdf"
+                        : generateDocumentFileName({ extension: "pdf" })
+                    );
+                    setShowExportDialog(true);
                   }}
                   className="flex-1 py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-xs flex items-center justify-center gap-1.5 transition cursor-pointer border border-slate-700/60"
+                  title="Tùy chọn đặt tên tệp trước khi tải"
                 >
                   <Download className="w-3.5 h-3.5 text-slate-400" />
                   <span>Tải PDF sạch về máy</span>
@@ -2225,6 +2364,96 @@ export const PDFSignatureModal: React.FC<PDFSignatureModalProps> = ({
                   Đóng
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DIALOG TÙY CHỌN ĐẶT TÊN / SỬA TÊN TRƯỚC KHI TẢI XUỐNG */}
+      {showExportDialog && (
+        <div className="fixed inset-0 z-[85] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-5 shadow-2xl animate-in zoom-in-95 duration-150 text-slate-100">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-blue-600/20 text-blue-400">
+                  <Download className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-white text-sm">Đặt tên tệp PDF trước khi tải</h4>
+                  <p className="text-[11px] text-slate-400">Tùy chỉnh tên tệp theo quy chuẩn hoặc ý muốn</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowExportDialog(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 mb-5">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  Tên tệp lưu vào máy:
+                </label>
+                <input
+                  type="text"
+                  value={exportFileNameInput}
+                  onChange={(e) => setExportFileNameInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") executeExportPDF(exportFileNameInput);
+                  }}
+                  autoFocus
+                  placeholder="Nhập tên tệp..."
+                  className="w-full px-3 py-2 rounded-xl bg-slate-800 text-xs text-white border border-slate-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                />
+                <p className="text-[10px] text-slate-500 mt-1">Đuôi mở rộng (.pdf) sẽ tự động được thêm nếu thiếu.</p>
+              </div>
+
+              {/* Gợi ý tên nhanh */}
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-400 mb-1.5">
+                  Gợi ý tên nhanh:
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setExportFileNameInput(generateDocumentFileName({ extension: "pdf" }))}
+                    className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[11px] border border-slate-700 transition cursor-pointer"
+                  >
+                    Chuẩn VietScan
+                  </button>
+                  {file?.name && (
+                    <button
+                      type="button"
+                      onClick={() => setExportFileNameInput(file.name.replace(/\.pdf$/i, "") + "_sach_chu_ky.pdf")}
+                      className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[11px] border border-slate-700 transition cursor-pointer"
+                    >
+                      Tên gốc + sạch chữ ký
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowExportDialog(false)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={() => executeExportPDF(exportFileNameInput)}
+                disabled={isProcessing}
+                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 active:scale-95 text-white text-xs font-bold shadow-lg shadow-blue-950/40 flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>{isProcessing ? "Đang xử lý..." : "Xác nhận & Tải về"}</span>
+              </button>
             </div>
           </div>
         </div>

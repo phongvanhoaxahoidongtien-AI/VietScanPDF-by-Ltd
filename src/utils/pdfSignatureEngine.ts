@@ -504,14 +504,14 @@ export class PDFSignatureEngine {
     const safeData = safeCloneToUint8Array(originalBuffer);
     const pdfDoc = await PDFDocument.load(safeData, { ignoreEncryption: true });
 
-    const erasedSigs = allSignatures.filter((s) =>
-      stripAllSignatures ? true : erasedSignatureIds.includes(s.id) || s.isErased
-    );
+    const isSigErased = (s: DetectedSignature) =>
+      stripAllSignatures ? true : erasedSignatureIds.includes(s.id) || Boolean(s.isErased);
+    const erasedSigs = allSignatures.filter(isSigErased);
 
     if (stripAllSignatures || erasedSigs.length > 0) {
       // Build lookup sets for unerased signatures to ensure absolute protection:
       // An unerased signature (even if 99% overlapping or sharing a field) MUST NEVER BE TOUCHED!
-      const unerasedSigs = allSignatures.filter((s) => !erasedSignatureIds.includes(s.id));
+      const unerasedSigs = allSignatures.filter((s) => !isSigErased(s));
       const unerasedAnnotObjs = new Set(
         unerasedSigs.map((s) => s.annotObjectNumber).filter((n): n is number => typeof n === "number")
       );
